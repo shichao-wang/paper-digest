@@ -26,7 +26,22 @@ go run ./cmd/paper-digest preview ./testdata/preview.json
 docker compose exec paper-digest paper-digest status
 ```
 
-仅当 `ANTHROPIC_API_KEY`、`FEISHU_WEBHOOK_URL` 均就绪，且你已确认试发对象与内容，才将 `.env` 中 `ENABLE_DELIVERY=true` 并重建容器。缺少凭据时保持禁用，不能把它视为已上线。真实调用模型会产生费用。Webhook URL 包含密钥，`.env`、数据库与备份不能提交或公开。
+## 受控飞书试发
+
+先在飞书确认目标群和群机器人身份，将该主题机器人的 HTTPS Webhook 填入 `.env` 的 `FEISHU_WEBHOOK_URL`，**保持 `ENABLE_DELIVERY=false`**。本命令不需要模型密钥、不读数据库、不抓论文；只发送以下固定文本：
+
+> 【论文日报机器人连通性测试】这是一条人工触发的测试消息，不是正式论文日报；未调用模型，也未整理真实论文。
+
+确认群、身份和以上内容后，在容器已运行的情况下执行：
+
+```bash
+docker compose up -d --build  # .env 更新后需要重建容器，使 Webhook 配置生效
+docker compose exec -T paper-digest paper-digest send-test --confirm
+```
+
+此命令会产生**一条真实群消息**，但不会启动日报任务；不用在命令行粘贴 Webhook。只有飞书明确返回成功码才报告请求已被接受，仍须在目标群核对。试发未确认（超时、断网或异常响应）时，先到群里核对，**不要盲目再次执行**；该人工试发不写入 SQLite，也不影响日报状态。
+
+仅当 `ANTHROPIC_API_KEY`、`FEISHU_WEBHOOK_URL` 均就绪，且已核对试发对象与内容，才将 `.env` 中 `ENABLE_DELIVERY=true` 并重建容器。缺少凭据时保持禁用，不能把它视为已上线。真实调用模型会产生费用。Webhook URL 包含密钥，`.env`、数据库与备份不能提交或公开。
 
 ## 运行语义
 
