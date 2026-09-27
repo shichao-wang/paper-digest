@@ -1,0 +1,19 @@
+[
+  {
+    "Paper": {
+      "ID": "arxiv:0000.00000",
+      "Version": "v1",
+      "Title": "离线预览样例（非真实论文）",
+      "Authors": ["示例作者"],
+      "Published": "2026-09-27T00:00:00Z",
+      "Updated": "2026-09-27T00:00:00Z",
+      "Abstract": "仅用于验证格式的虚构输入。",
+      "URL": "https://arxiv.org/abs/0000.00000v1"
+    },
+    "Summary": {
+      "Text": "这是一条离线排版样例，不代表真实论文结论。",
+      "Model": "fixture",
+      "PromptVersion": "preview-v1"
+    }
+  }
+]

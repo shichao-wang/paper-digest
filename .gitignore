@@ -1,0 +1,7 @@
+.env
+*.db
+*.db-*
+data/
+backups/
+/paper-digest
+.DS_Store

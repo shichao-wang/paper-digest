@@ -1,0 +1,21 @@
+services:
+  paper-digest:
+    build: .
+    restart: unless-stopped
+    init: true
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DB_PATH: /data/digest.db
+      TZ: Asia/Shanghai
+    volumes:
+      - digest-data:/data
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/paper-digest", "health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    # 无公网端口；未来若加 cloudflared，须单独配置 Access。
+volumes:
+  digest-data:
