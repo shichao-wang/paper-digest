@@ -26,9 +26,15 @@ go run ./cmd/paper-digest preview ./testdata/preview.json
 docker compose exec paper-digest paper-digest status
 ```
 
+## 主题与机器人配置
+
+`config/topics.json` 只保存主题 ID 到 Webhook **环境变量名**的映射，不保存真实 URL。当前 `recommendation-advertising-search` 是 Recommendation／Advertising／Search 联合主题，映射到 `FEISHU_WEBHOOK_RAS`；真实 HTTPS URL 只存放在本机忽略的 `.env`，不得放进仓库或镜像。从旧配置迁移时，将 `.env` 中的 `FEISHU_WEBHOOK_URL` 改名为 `FEISHU_WEBHOOK_RAS`，不要把 URL 粘贴进 `config/topics.json`。变更映射或 `.env` 后需重建容器。
+
+可以预先添加其他主题的机器人映射并对其受控试发，但**新增映射不会启动该主题的日报**：目前只运行上述联合主题；新主题还需另行实现论文抓取、筛选、渲染和调度。
+
 ## 受控飞书试发
 
-先在飞书确认目标群和群机器人身份，将该主题机器人的 HTTPS Webhook 填入 `.env` 的 `FEISHU_WEBHOOK_URL`，**保持 `ENABLE_DELIVERY=false`**。本命令不需要模型密钥、不读数据库、不抓论文；只发送以下固定文本：
+先在飞书确认目标群和群机器人身份，将联合主题机器人的 HTTPS Webhook 填入 `.env` 的 `FEISHU_WEBHOOK_RAS`，**保持 `ENABLE_DELIVERY=false`**。本命令不需要模型密钥、不读数据库、不抓论文；只发送以下固定文本：
 
 > 【论文日报机器人连通性测试】这是一条人工触发的测试消息，不是正式论文日报；未调用模型，也未整理真实论文。
 
@@ -36,12 +42,12 @@ docker compose exec paper-digest paper-digest status
 
 ```bash
 docker compose up -d --build  # .env 更新后需要重建容器，使 Webhook 配置生效
-docker compose exec -T paper-digest paper-digest send-test --confirm
+docker compose exec -T paper-digest paper-digest send-test --topic recommendation-advertising-search --confirm
 ```
 
 此命令会产生**一条真实群消息**，但不会启动日报任务；不用在命令行粘贴 Webhook。只有飞书明确返回成功码才报告请求已被接受，仍须在目标群核对。试发未确认（超时、断网或异常响应）时，先到群里核对，**不要盲目再次执行**；该人工试发不写入 SQLite，也不影响日报状态。
 
-仅当 `ANTHROPIC_API_KEY`、`FEISHU_WEBHOOK_URL` 均就绪，且已核对试发对象与内容，才将 `.env` 中 `ENABLE_DELIVERY=true` 并重建容器。缺少凭据时保持禁用，不能把它视为已上线。真实调用模型会产生费用。Webhook URL 包含密钥，`.env`、数据库与备份不能提交或公开。
+仅当 `ANTHROPIC_API_KEY`、当前主题对应的 `FEISHU_WEBHOOK_RAS` 均就绪，且已核对试发对象与内容，才将 `.env` 中 `ENABLE_DELIVERY=true` 并重建容器。缺少凭据时保持禁用，不能把它视为已上线。真实调用模型会产生费用。Webhook URL 包含密钥，`.env`、数据库与备份不能提交或公开。
 
 ## 运行语义
 
@@ -64,6 +70,7 @@ docker compose cp paper-digest:/data/digest-backup.db ./digest-backup.db
 
 ## 结构
 
+- `internal/config/`：主题路由配置加载与校验，映射文件为 `config/topics.json`。
 - `internal/papers/`：arXiv 公开元数据抓取、联合主题筛选和稳定 ID。
 - `internal/digest/`：基于公开摘要的 Claude 分析与中文日报组装。
 - `internal/state/`：SQLite 事务、逐篇恢复、发送意图与历史去重。

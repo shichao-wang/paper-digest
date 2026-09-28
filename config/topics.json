@@ -1,0 +1,8 @@
+{
+  "topics": [
+    {
+      "id": "recommendation-advertising-search",
+      "webhook_env": "FEISHU_WEBHOOK_RAS"
+    }
+  ]
+}

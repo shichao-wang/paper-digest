@@ -8,9 +8,11 @@ services:
         required: false
     environment:
       DB_PATH: /data/digest.db
+      CONFIG_PATH: /etc/paper-digest/topics.json
       TZ: Asia/Shanghai
     volumes:
       - digest-data:/data
+      - ./config/topics.json:/etc/paper-digest/topics.json:ro
     healthcheck:
       test: ["CMD", "/usr/local/bin/paper-digest", "health"]
       interval: 30s

@@ -10,10 +10,10 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
+	"github.com/shichao-wang/paper-digest/internal/config"
 	"github.com/shichao-wang/paper-digest/internal/delivery"
 	"github.com/shichao-wang/paper-digest/internal/digest"
 	"github.com/shichao-wang/paper-digest/internal/job"
@@ -31,23 +31,36 @@ func main() {
 const testMessage = "【论文日报机器人连通性测试】这是一条人工触发的测试消息，不是正式论文日报；未调用模型，也未整理真实论文。"
 
 func sendTest(ctx context.Context, webhook string, client *http.Client) error {
-	if webhook == "" {
-		return errors.New("试发需要 FEISHU_WEBHOOK_URL；请先确认目标群与机器人身份")
-	}
 	return (delivery.Feishu{WebhookURL: webhook, Client: client}).Send(ctx, testMessage)
+}
+
+func configuredWebhook(topicID string) (string, error) {
+	path := os.Getenv("CONFIG_PATH")
+	if path == "" {
+		path = "config/topics.json"
+	}
+	topics, err := config.Load(path, job.Topic)
+	if err != nil {
+		return "", err
+	}
+	return topics.Webhook(topicID, os.Getenv)
 }
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return errors.New("用法: paper-digest serve|health|status [日期]|preview <fixture.json>|backup <文件>|send-test --confirm")
+		return errors.New("用法: paper-digest serve|health|status [日期]|preview <fixture.json>|backup <文件>|send-test --topic <id> --confirm")
 	}
 	if args[0] == "send-test" {
-		if len(args) != 2 || args[1] != "--confirm" {
-			return errors.New("用法: paper-digest send-test --confirm（先确认目标群、机器人身份和测试内容）")
+		if len(args) != 4 || args[1] != "--topic" || args[2] == "" || args[3] != "--confirm" {
+			return errors.New("用法: paper-digest send-test --topic <id> --confirm（先确认目标群、机器人身份和测试内容）")
+		}
+		webhook, err := configuredWebhook(args[2])
+		if err != nil {
+			return err
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		if err := sendTest(ctx, os.Getenv("FEISHU_WEBHOOK_URL"), nil); err != nil {
+		if err := sendTest(ctx, webhook, nil); err != nil {
 			return err
 		}
 		fmt.Println("飞书已确认接收测试请求；请在目标群核对消息，不要仅凭响应判断送达。")
@@ -104,11 +117,12 @@ func run(args []string) error {
 			<-wait.Done()
 			return nil
 		}
-		if os.Getenv("ANTHROPIC_API_KEY") == "" || os.Getenv("FEISHU_WEBHOOK_URL") == "" {
-			return errors.New("启用真实运行需要 ANTHROPIC_API_KEY 和 FEISHU_WEBHOOK_URL")
+		if os.Getenv("ANTHROPIC_API_KEY") == "" {
+			return errors.New("启用真实运行需要 ANTHROPIC_API_KEY")
 		}
-		if !strings.HasPrefix(os.Getenv("FEISHU_WEBHOOK_URL"), "https://") {
-			return errors.New("飞书 Webhook 必须使用 HTTPS")
+		webhook, err := configuredWebhook(job.Topic)
+		if err != nil {
+			return err
 		}
 		lookback := 7
 		if value := os.Getenv("ARXIV_LOOKBACK_DAYS"); value != "" {
@@ -129,7 +143,7 @@ func run(args []string) error {
 				return papers.Fetch(fetchCtx, &http.Client{Timeout: 40 * time.Second}, "", 100)
 			},
 			Analyzer:     digest.ClaudeAnalyzer{Model: model},
-			Sender:       delivery.Feishu{WebhookURL: os.Getenv("FEISHU_WEBHOOK_URL")},
+			Sender:       delivery.Feishu{WebhookURL: webhook},
 			LookbackDays: lookback,
 			Now:          time.Now,
 		}
