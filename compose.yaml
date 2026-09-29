@@ -3,16 +3,9 @@ services:
     build: .
     restart: unless-stopped
     init: true
-    env_file:
-      - path: .env
-        required: false
-    environment:
-      DB_PATH: /data/digest.db
-      CONFIG_PATH: /etc/paper-digest/topics.json
-      TZ: Asia/Shanghai
     volumes:
       - digest-data:/data
-      - ./config/topics.json:/etc/paper-digest/topics.json:ro
+      - ./config/config.json:/app/config/config.json:ro
     healthcheck:
       test: ["CMD", "/usr/local/bin/paper-digest", "health"]
       interval: 30s

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/shichao-wang/paper-digest/internal/papers"
 )
 
@@ -25,7 +26,8 @@ type Analyzer interface {
 
 type ClaudeAnalyzer struct {
 	Model   string
-	request func(context.Context, string, string) (string, error)
+	APIKey  string
+	request func(context.Context, string, string, string) (string, error)
 }
 
 func (a ClaudeAnalyzer) Analyze(ctx context.Context, paper papers.Paper) (Summary, error) {
@@ -38,7 +40,7 @@ func (a ClaudeAnalyzer) Analyze(ctx context.Context, paper papers.Paper) (Summar
 	if request == nil {
 		request = requestClaude
 	}
-	text, err := request(ctx, model, buildPrompt(paper))
+	text, err := request(ctx, a.APIKey, model, buildPrompt(paper))
 	if err != nil {
 		return Summary{}, fmt.Errorf("analyze arXiv paper %s: %w", paper.ID, err)
 	}
@@ -49,8 +51,12 @@ func (a ClaudeAnalyzer) Analyze(ctx context.Context, paper papers.Paper) (Summar
 	return Summary{Text: text, Model: model, PromptVersion: promptVersion}, nil
 }
 
-func requestClaude(ctx context.Context, model, prompt string) (string, error) {
-	client := anthropic.NewClient()
+func newClaudeClient(apiKey string, opts ...option.RequestOption) anthropic.Client {
+	return anthropic.NewClient(append([]option.RequestOption{option.WithoutEnvironmentDefaults(), option.WithAPIKey(apiKey)}, opts...)...)
+}
+
+func requestClaude(ctx context.Context, apiKey, model, prompt string) (string, error) {
+	client := newClaudeClient(apiKey)
 	response, err := client.Messages.New(ctx, anthropic.MessageNewParams{
 		Model:     model,
 		MaxTokens: 1200,
