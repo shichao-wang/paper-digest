@@ -1,5 +1,7 @@
 .git
+.claude/
 .env
+config/config.json
 *.db*
 data
 backups

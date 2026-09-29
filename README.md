@@ -2,13 +2,14 @@
 
 本机 Docker Compose 运行的 Go 服务：每天北京时间 08:00 搜集 Recommendation / Advertising / Search **联合主题**的 arXiv 新论文，根据公开摘要生成中文要点；09:00 仅在日报完整就绪时，通过飞书群机器人 Webhook 发送一份日报。第一版不抓取全文、项目页或解读网页；历史论文、摘要版本、任务与发送状态保存在 SQLite 中。
 
-> 默认 **不调用模型、不发送飞书**。须自行确认目标群、机器人身份、内容及模型费用后，显式配置 `ENABLE_DELIVERY=true` 才启用实际任务。现阶段没有做过真实发送或 09:00 投递验收。
+> 默认 **不调用模型、不发送飞书**。须自行确认目标群、机器人身份、内容及模型费用后，在未跟踪的 `config/config.json` 中设置 `delivery.enabled=true` 才启用实际任务。现阶段没有做过真实发送或 09:00 投递验收。
 
 ## 本机构建
 
 ```bash
-cp .env.example .env
-# 根据需要填写 .env；首次可保持 ENABLE_DELIVERY=false
+cp config/config.example.json config/config.json
+chmod 600 config/config.json
+# 只在 config/config.json 中填真实凭据；首次保持 delivery.enabled=false
 docker compose up -d --build
 docker compose ps
 docker compose logs --tail=100 paper-digest
@@ -28,33 +29,37 @@ docker compose exec paper-digest paper-digest status
 
 ## 主题与机器人配置
 
-`config/topics.json` 只保存主题 ID 到 Webhook **环境变量名**的映射，不保存真实 URL。当前 `recommendation-advertising-search` 是 Recommendation／Advertising／Search 联合主题，映射到 `FEISHU_WEBHOOK_RAS`；真实 HTTPS URL 只存放在本机忽略的 `.env`，不得放进仓库或镜像。从旧配置迁移时，将 `.env` 中的 `FEISHU_WEBHOOK_URL` 改名为 `FEISHU_WEBHOOK_RAS`，不要把 URL 粘贴进 `config/topics.json`。变更映射或 `.env` 后需重建容器。
+`config/config.example.json` 是可提交的示例，`config/config.json` 是 **Git 和 Docker 构建都忽略的实际配置**；后者通过 Compose 只读挂载到容器，不在镜像中。请在启动 Compose **之前**创建该文件，且仅在实际配置中填写密钥。当前 `recommendation-advertising-search` 是 Recommendation／Advertising／Search 联合主题，其 `webhook_url` 是对应群机器人的 HTTPS Webhook。
 
-可以预先添加其他主题的机器人映射并对其受控试发，但**新增映射不会启动该主题的日报**：目前只运行上述联合主题；新主题还需另行实现论文抓取、筛选、渲染和调度。
+配置文件还包含 `database.path`（保持 `/data/digest.db`，对应现有数据卷）、`delivery.enabled`、`anthropic.api_key`、`anthropic.model` 和 `arxiv.lookback_days`（1～30 天）。程序不会从旧环境变量补齐这些字段；SDK 也只使用配置中的 API key。直接运行 CLI 时默认读取工作目录下的 `config/config.json`，如需其他路径可在子命令前指定 `--config <文件>`。`health` 和 `preview` 不读取该文件。
+
+从旧 `.env` 迁移时，将 `ANTHROPIC_API_KEY`、`ANTHROPIC_MODEL`、`ARXIV_LOOKBACK_DAYS`、`ENABLE_DELIVERY` 分别填入上述 JSON 字段；将 `FEISHU_WEBHOOK_RAS`（旧版可能为 `FEISHU_WEBHOOK_URL`）填入相应主题的 `webhook_url`。不要把 URL 或 API key 粘贴进示例配置或提交到 Git。旧 `.env` 不再被使用，若本机存在请自行安全处理。修改实际配置后用 `docker compose up -d --force-recreate paper-digest` 重建容器以重新挂载配置（不重建镜像、不删除数据卷）；代码或 Compose 变更才需要重建镜像。
+
+可以预先添加其他主题的机器人 URL 并对其受控试发，但**新增主题不会启动该主题的日报**：目前只运行上述联合主题；新主题还需另行实现论文抓取、筛选、渲染和调度。
 
 ## 受控飞书试发
 
-先在飞书确认目标群和群机器人身份，将联合主题机器人的 HTTPS Webhook 填入 `.env` 的 `FEISHU_WEBHOOK_RAS`，**保持 `ENABLE_DELIVERY=false`**。本命令不需要模型密钥、不读数据库、不抓论文；只发送以下固定文本：
+先在飞书确认目标群和群机器人身份，将联合主题机器人的 HTTPS Webhook 填入 `config/config.json` 对应主题的 `webhook_url`，**保持 `delivery.enabled=false`**。本命令不需要模型密钥、不读数据库、不抓论文；只发送以下固定文本：
 
 > 【论文日报机器人连通性测试】这是一条人工触发的测试消息，不是正式论文日报；未调用模型，也未整理真实论文。
 
 确认群、身份和以上内容后，在容器已运行的情况下执行：
 
 ```bash
-docker compose up -d --build  # .env 更新后需要重建容器，使 Webhook 配置生效
+docker compose up -d --force-recreate paper-digest  # 配置更新后重新挂载文件
 docker compose exec -T paper-digest paper-digest send-test --topic recommendation-advertising-search --confirm
 ```
 
 此命令会产生**一条真实群消息**，但不会启动日报任务；不用在命令行粘贴 Webhook。只有飞书明确返回成功码才报告请求已被接受，仍须在目标群核对。试发未确认（超时、断网或异常响应）时，先到群里核对，**不要盲目再次执行**；该人工试发不写入 SQLite，也不影响日报状态。
 
-仅当 `ANTHROPIC_API_KEY`、当前主题对应的 `FEISHU_WEBHOOK_RAS` 均就绪，且已核对试发对象与内容，才将 `.env` 中 `ENABLE_DELIVERY=true` 并重建容器。缺少凭据时保持禁用，不能把它视为已上线。真实调用模型会产生费用。Webhook URL 包含密钥，`.env`、数据库与备份不能提交或公开。
+仅当 `config/config.json` 中的 `anthropic.api_key`、当前主题的 `webhook_url` 均就绪，且已核对试发对象与内容，才将 `delivery.enabled` 改为 `true` 并重新创建容器。缺少凭据时保持禁用，不能把它视为已上线。真实调用模型会产生费用。Webhook URL 包含密钥，实际配置、数据库与备份不能提交或公开。
 
 ## 运行语义
 
 - 08:00～09:00 创建或恢复当天任务；单 worker 逐篇生成，最多 5 篇。重启后在 09:00 前继续；09:00 后启动不会自动补发。
 - 09:00 仅发送 `ready` 的完整日报；未就绪记 `missed`。发送前持久化意图，只有飞书明确成功才记 `sent`；超时、异常退出等记 `unknown`，**不自动重发**，须先去目标群核对。
 - 论文 ID 使用不含 arXiv 版本号的稳定 ID；只有确认送达后才记已推荐。生成依据是公开原摘要，日报会明确标注，不能视为论文全文解读。
-- `Asia/Shanghai` 在程序中明确指定，与容器 `TZ` 环境变量无关。若机器休眠/断电/断网，不能保证 09:00 送达；请自行监控日志中的 `missed` / `unknown` 并保持 Docker Desktop 开机。
+- `Asia/Shanghai` 在程序中明确指定，不依赖容器时区环境变量。若机器休眠/断电/断网，不能保证 09:00 送达；请自行监控日志中的 `missed` / `unknown` 并保持 Docker Desktop 开机。
 
 ## 备份与恢复
 
@@ -70,7 +75,7 @@ docker compose cp paper-digest:/data/digest-backup.db ./digest-backup.db
 
 ## 结构
 
-- `internal/config/`：主题路由配置加载与校验，映射文件为 `config/topics.json`。
+- `internal/config/`：运行配置与主题 Webhook 的加载和校验，示例文件为 `config/config.example.json`。
 - `internal/papers/`：arXiv 公开元数据抓取、联合主题筛选和稳定 ID。
 - `internal/digest/`：基于公开摘要的 Claude 分析与中文日报组装。
 - `internal/state/`：SQLite 事务、逐篇恢复、发送意图与历史去重。

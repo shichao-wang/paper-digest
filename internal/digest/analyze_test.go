@@ -3,10 +3,14 @@ package digest
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/shichao-wang/paper-digest/internal/papers"
 )
 
@@ -24,8 +28,12 @@ func TestClaudeAnalyzerUsesConfiguredModelAndTraceablePrompt(t *testing.T) {
 	}
 	called := false
 	analyzer := ClaudeAnalyzer{
-		Model: "claude-test-model",
-		request: func(_ context.Context, model, prompt string) (string, error) {
+		Model:  "claude-test-model",
+		APIKey: "file-key",
+		request: func(_ context.Context, apiKey, model, prompt string) (string, error) {
+			if apiKey != "file-key" {
+				t.Errorf("未使用配置文件中的密钥")
+			}
 			called = true
 			if model != "claude-test-model" {
 				t.Errorf("model = %q, want configured model", model)
@@ -53,7 +61,7 @@ func TestClaudeAnalyzerUsesConfiguredModelAndTraceablePrompt(t *testing.T) {
 
 func TestClaudeAnalyzerDefaultsModelAndRejectsEmptyResult(t *testing.T) {
 	analyzer := ClaudeAnalyzer{
-		request: func(_ context.Context, model, _ string) (string, error) {
+		request: func(_ context.Context, _, model, _ string) (string, error) {
 			if model != defaultModel {
 				t.Errorf("model = %q, want default %q", model, defaultModel)
 			}
@@ -65,10 +73,32 @@ func TestClaudeAnalyzerDefaultsModelAndRejectsEmptyResult(t *testing.T) {
 	}
 }
 
+func TestClaudeClientUsesFileKeyInsteadOfEnvironment(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "environment-key")
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.Header.Get("X-Api-Key") != "file-key" {
+			t.Errorf("SDK 未使用配置中的密钥")
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"type":"error","error":{"type":"invalid_request_error","message":"test"}}`))
+	}))
+	defer server.Close()
+	client := newClaudeClient("file-key", option.WithBaseURL(server.URL))
+	_, _ = client.Messages.New(context.Background(), anthropic.MessageNewParams{
+		Model: "claude-test-model", MaxTokens: 1,
+		Messages: []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock("test"))},
+	})
+	if calls != 1 {
+		t.Fatalf("应向本地测试服务发送一次请求，实际 %d 次", calls)
+	}
+}
+
 func TestClaudeAnalyzerWrapsRequestError(t *testing.T) {
 	wantErr := errors.New("temporary API failure")
 	analyzer := ClaudeAnalyzer{
-		request: func(context.Context, string, string) (string, error) {
+		request: func(context.Context, string, string, string) (string, error) {
 			return "", wantErr
 		},
 	}
