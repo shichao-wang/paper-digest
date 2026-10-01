@@ -23,10 +23,11 @@ for date, status in [('2026-10-01', 'ready'), ('2026-09-30', 'unknown')]:
     conn.execute('INSERT OR REPLACE INTO jobs VALUES(?,?,?,?)', (topic,date,status,'【虚构演示日报】\n以上标题、作者和摘要仅供页面验收，不是真实论文。'))
     for position, (identifier,title,authors,abstract,summary) in enumerate(entries):
         version = 'v2' if date == '2026-10-01' else 'v1'
-        paper = dict(ID=identifier,Version=version,Title=title + ' [Demo]',Authors=authors,Published='2026-09-29T08:00:00Z',Updated='2026-09-30T08:00:00Z',Abstract=abstract+'\nThis fictional paper is provided for interface verification only. It describes a research problem, a proposed method, and limitations based on an abstract. No claims refer to a real publication.',URL='https://arxiv.org/abs/'+identifier+version)
+        stable_id = 'arxiv:' + identifier
+        paper = dict(ID=stable_id,Version=version,Title=title + ' [Demo]',Authors=authors,Published='2026-09-29T08:00:00Z',Updated='2026-09-30T08:00:00Z',Abstract=abstract+'\nThis fictional paper is provided for interface verification only. It describes a research problem, a proposed method, and limitations based on an abstract. No claims refer to a real publication.',URL='https://arxiv.org/abs/'+identifier+version)
         analysis = json.dumps(dict(Text=summary,Model='demo-model',PromptVersion='demo')) if summary else None
-        conn.execute('INSERT OR REPLACE INTO papers VALUES(?,?,?,?)', (topic,identifier,version,json.dumps(paper)))
-        conn.execute('INSERT OR REPLACE INTO job_papers VALUES(?,?,?,?,?,?)', (topic,date,identifier,version,position,analysis))
+        conn.execute('INSERT OR REPLACE INTO papers VALUES(?,?,?,?)', (topic,stable_id,version,json.dumps(paper)))
+        conn.execute('INSERT OR REPLACE INTO job_papers VALUES(?,?,?,?,?,?)', (topic,date,stable_id,version,position,analysis))
 conn.execute('INSERT OR REPLACE INTO jobs VALUES(?,?,?,?)', (topic,'2026-09-29','missed',''))
 conn.commit()
 conn.close()

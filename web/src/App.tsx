@@ -21,7 +21,7 @@ function Pagination({ page, total, pageSize, onChange }: { page: number; total: 
 }
 function PaperDetail({ paper, onBack }: { paper: Paper; onBack: () => void }) {
   const version = /^v\d+$/.test(paper.version) ? paper.version : ''
-  const identifier = paper.id + version
+  const identifier = paper.id.replace(/^arxiv:/, '') + version
   const arxivURL = `https://arxiv.org/abs/${identifier}`
   const pdfURL = `https://arxiv.org/pdf/${identifier}`
   return <article className="paper-detail">
