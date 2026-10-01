@@ -1,11 +1,15 @@
+import argparse
 import json
 import sqlite3
 from pathlib import Path
 
-root = Path(__file__).resolve().parents[1] / 'data' / 'web-preview'
+parser = argparse.ArgumentParser(description='创建独立的双主题虚构演示数据库。')
+parser.add_argument('--output', default='data/web-preview', help='相对于仓库根目录的输出目录')
+args = parser.parse_args()
+root = Path(__file__).resolve().parents[1] / args.output
 root.mkdir(parents=True, exist_ok=True)
 if (root / 'digest.db').exists():
-    raise SystemExit('演示数据库已存在；为避免覆盖，请另行确认并清理 data/web-preview 后再执行。')
+    raise SystemExit('演示数据库已存在；为避免覆盖，请用 --output 指定新的目录。')
 conn = sqlite3.connect(root / 'digest.db')
 conn.executescript('''
 CREATE TABLE IF NOT EXISTS jobs (topic TEXT NOT NULL,date TEXT NOT NULL,status TEXT NOT NULL,message TEXT NOT NULL DEFAULT '',PRIMARY KEY(topic,date));
@@ -29,6 +33,11 @@ for date, status in [('2026-10-01', 'ready'), ('2026-09-30', 'unknown')]:
         conn.execute('INSERT OR REPLACE INTO papers VALUES(?,?,?,?)', (topic,stable_id,version,json.dumps(paper)))
         conn.execute('INSERT OR REPLACE INTO job_papers VALUES(?,?,?,?,?,?)', (topic,date,stable_id,version,position,analysis))
 conn.execute('INSERT OR REPLACE INTO jobs VALUES(?,?,?,?)', (topic,'2026-09-29','missed',''))
+other_topic = 'demo-other-topic'
+conn.execute('INSERT INTO jobs VALUES(?,?,?,?)', (other_topic, '2026-10-01', 'ready', '【另一个主题的虚构演示日报】\n用于验证相同日期与论文 ID 不会串到其他主题。'))
+other_paper = dict(ID='arxiv:2610.00001', Version='v1', Title='Independent Topic Paper [Demo]', Authors=['Demo Author'], Published='2026-09-29T08:00:00Z', Updated='2026-09-30T08:00:00Z', Abstract='另一个主题的独立摘要，仅用于主题隔离验收。', URL='https://arxiv.org/abs/2610.00001v1')
+conn.execute('INSERT INTO papers VALUES(?,?,?,?)', (other_topic, other_paper['ID'], other_paper['Version'], json.dumps(other_paper)))
+conn.execute('INSERT INTO job_papers VALUES(?,?,?,?,?,?)', (other_topic, '2026-10-01', other_paper['ID'], other_paper['Version'], 0, json.dumps(dict(Text='另一个主题的中文要点 [Demo]', Model='demo-model', PromptVersion='demo'))))
 conn.commit()
 conn.close()
-(root / 'config.json').write_text(json.dumps(dict(database=dict(path=str(root / 'digest.db')),delivery=dict(enabled=False),anthropic=dict(api_key='',model='',base_url=''),arxiv=dict(lookback_days=7),topics=[dict(id=topic,webhook_url='')]), indent=2))
+(root / 'config.json').write_text(json.dumps(dict(database=dict(path=str(root / 'digest.db')),delivery=dict(enabled=False),anthropic=dict(api_key='',model='',base_url=''),arxiv=dict(lookback_days=7),topics=[dict(id=topic),dict(id=other_topic)]), indent=2))

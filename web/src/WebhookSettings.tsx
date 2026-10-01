@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { useRequest } from './hooks'
+import type { Topic } from './types'
 
 type Settings = { topic: string; configured: boolean; deliveryEnabled: boolean }
-const endpoint = '/api/settings/webhook'
 
-export default function WebhookSettings() {
+export default function WebhookSettings({ topic }: { topic: Topic }) {
+  const endpoint = `/api/settings/webhook?${new URLSearchParams({ topic: topic.id })}`
   const request = useRequest<Settings>(endpoint)
   const [saved, setSaved] = useState<Settings>()
   const settings = saved || request.data
@@ -42,7 +43,7 @@ export default function WebhookSettings() {
       setSaved(data)
       setWebhookURL('')
       setConfirmClear(false)
-      setFeedback({ error: false, text: data.configured ? 'Webhook 已保存，后续推送将使用新地址。' : 'Webhook 已清除，后续日报暂停推送。' })
+      setFeedback({ error: false, text: data.configured ? `${topic.name}的 Webhook 已保存，后续推送将使用新地址。` : `${topic.name}的 Webhook 已清除，该主题暂停推送。` })
     } catch {
       if (controller.signal.aborted) return
       setFeedback({ error: true, text: failure })
@@ -60,15 +61,15 @@ export default function WebhookSettings() {
   </div>
 
   return <section className="settings-panel" aria-labelledby="webhook-heading">
-    <div className="settings-heading"><div><h3 id="webhook-heading">飞书群机器人</h3><p>推荐 / 广告 / 搜索联合主题的日报推送目标。</p></div><span className={`status ${settings.configured ? 'status-ready' : ''}`}>{settings.configured ? '已配置' : '未配置'}</span></div>
+    <div className="settings-heading"><div><h3 id="webhook-heading">飞书群机器人 · {topic.name}</h3><p>仅管理当前主题的日报推送目标。主题 ID：{settings.topic}</p></div><span className={`status ${settings.configured ? 'status-ready' : ''}`}>{settings.configured ? '已配置' : '未配置'}</span></div>
     <form onSubmit={event => { event.preventDefault(); const value = webhookURL.trim(); if (value) void save(value) }} aria-busy={saving}>
       <label className="webhook-label" htmlFor="webhook-url">{settings.configured ? '替换 Webhook 地址' : 'Webhook 地址'}</label>
       <p className="field-help" id="webhook-help">从飞书群机器人的设置中复制完整 HTTPS 地址。已保存的地址不会显示。</p>
       <input id="webhook-url" className="webhook-input" type="password" inputMode="url" autoComplete="off" spellCheck={false} maxLength={4096} placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/…" aria-describedby="webhook-help" value={webhookURL} disabled={saving} onChange={event => { setWebhookURL(event.target.value); setFeedback(undefined); setConfirmClear(false) }} />
       <div className="settings-actions"><button className="primary" type="submit" disabled={saving || !webhookURL.trim()}>{saving ? '正在保存…' : '保存 Webhook'}</button>{settings.configured && <button className="secondary" type="button" disabled={saving} onClick={() => { setConfirmClear(true); setFeedback(undefined) }}>清除配置</button>}</div>
     </form>
-    {confirmClear && <div className="clear-confirm" role="group" aria-label="确认清除 Webhook"><p>清除后将暂停日报推送，重新配置地址后恢复。确定清除？</p><div className="settings-actions"><button className="secondary" disabled={saving} onClick={() => void save('')}>确认清除</button><button className="text-button" disabled={saving} onClick={() => setConfirmClear(false)}>取消</button></div></div>}
+    {confirmClear && <div className="clear-confirm" role="group" aria-label="确认清除 Webhook"><p>确定清除{topic.name}的 Webhook？只会暂停该主题的推送，其他主题不受影响。</p><div className="settings-actions"><button className="secondary" disabled={saving} onClick={() => void save('')}>确认清除</button><button className="text-button" disabled={saving} onClick={() => setConfirmClear(false)}>取消</button></div></div>}
     {feedback && <p className={`settings-feedback ${feedback.error ? 'notice' : ''}`} role={feedback.error ? 'alert' : 'status'}>{feedback.text}</p>}
-    <div className="settings-notes"><p>保存立即生效，不会发送测试消息或补发历史日报。</p><p>{settings.deliveryEnabled ? '自动运行已开启：每天北京时间 09:00 推送已生成的日报。' : '自动运行当前关闭。保存地址后，可在运行配置中开启自动任务。'}</p></div>
+    <div className="settings-notes"><p>保存立即生效，不会发送测试消息或补发历史日报。</p><p>{settings.deliveryEnabled ? '当前主题自动运行已开启：每天北京时间 09:00 推送已生成的日报。' : '当前主题没有启用自动任务。保存 Webhook 不会启动采集、生成或推送。'}</p></div>
   </section>
 }
