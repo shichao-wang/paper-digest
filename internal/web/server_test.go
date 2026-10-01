@@ -3,9 +3,11 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -47,6 +49,185 @@ func request(handler http.Handler, method, target, accept string) *httptest.Resp
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 	return w
+}
+
+func TestWebhookSettingsPersistWithoutExposingURL(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.db")
+	store, err := state.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { store.Close() }()
+	files := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("fixture")}}
+	handler, err := New(store, files, Options{DeliveryEnabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Error("设置不得试发") }))
+	defer server.Close()
+	check := func(response *httptest.ResponseRecorder, configured bool) {
+		t.Helper()
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(response.Body.Bytes(), &fields); err != nil {
+			t.Fatal(err)
+		}
+		if response.Code != 200 || len(fields) != 3 || string(fields["topic"]) != `"`+job.Topic+`"` || string(fields["configured"]) != fmt.Sprint(configured) || string(fields["deliveryEnabled"]) != "true" || response.Header().Get("Cache-Control") != "no-store" || strings.Contains(response.Body.String(), server.URL) || strings.Contains(response.Body.String(), "secret") {
+			t.Fatalf("settings response=%d %s", response.Code, response.Body.String())
+		}
+	}
+	check(request(handler, "GET", "/api/settings/webhook", ""), false)
+	put := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("PUT", "http://localhost/api/settings/webhook", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json; charset=utf-8")
+		req.Header.Set("Origin", "http://"+req.Host)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		return w
+	}
+	check(put(`{"webhookURL":"  `+server.URL+`/secret  "}`), true)
+	if got, err := store.Webhook(context.Background(), job.Topic); err != nil || got != server.URL+"/secret" {
+		t.Fatal("设置未保存或未 trim")
+	}
+	store.Close()
+	store, err = state.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err = New(store, files, Options{DeliveryEnabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check(request(handler, "GET", "/api/settings/webhook", ""), true)
+	check(put(`{"webhookURL":" \t "}`), false)
+	check(request(handler, "GET", "/api/settings/webhook", ""), false)
+	store.Close()
+	for _, method := range []string{"GET", "PUT"} {
+		req := httptest.NewRequest(method, "http://localhost/api/settings/webhook", strings.NewReader(`{"webhookURL":"`+server.URL+`/secret"}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != 503 || w.Body.String() != "{\"error\":\"service unavailable\"}\n" {
+			t.Fatalf("database failure exposed: %d %s", w.Code, w.Body.String())
+		}
+	}
+}
+
+func TestWebhookPutStrictValidationAndSameOrigin(t *testing.T) {
+	store, handler := testHandler(t)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Error("设置不得发送请求") }))
+	defer server.Close()
+	initial := server.URL + "/secret"
+	if err := store.SetWebhook(context.Background(), job.Topic, initial); err != nil {
+		t.Fatal(err)
+	}
+	valid := `{"webhookURL":"` + initial + `"}`
+	for _, tc := range []struct {
+		name, body, contentType, origin, site string
+		status                                int
+	}{
+		{"missing content type", valid, "", "", "", 415},
+		{"text content type", valid, "text/plain", "", "", 415},
+		{"malformed content type", valid, "application/json;bad", "", "", 415},
+		{"cross origin", valid, "application/json", "https://other.invalid", "", 403},
+		{"different port", valid, "application/json", "http://localhost:8080", "", 403},
+		{"null origin", valid, "application/json", "null", "", 403},
+		{"origin path", valid, "application/json", "http://localhost/path", "", 403},
+		{"origin credentials", valid, "application/json", "http://user:secret@localhost", "", 403},
+		{"fetch cross-site", valid, "application/json", "http://localhost", "cross-site", 403},
+		{"missing field", `{}`, "application/json", "", "", 400},
+		{"null object", `null`, "application/json", "", "", 400},
+		{"array", `[]`, "application/json", "", "", 400},
+		{"null field", `{"webhookURL":null}`, "application/json", "", "", 400},
+		{"wrong type", `{"webhookURL":123}`, "application/json", "", "", 400},
+		{"case mismatch", `{"WebhookURL":""}`, "application/json", "", "", 400},
+		{"unknown field", `{"webhookURL":"","secret":true}`, "application/json", "", "", 400},
+		{"duplicate field", `{"webhookURL":"","webhookURL":""}`, "application/json", "", "", 400},
+		{"trailing object", valid + `{}`, "application/json", "", "", 400},
+		{"trailing junk", valid + `secret`, "application/json", "", "", 400},
+		{"too large", `{"webhookURL":"` + strings.Repeat("secret", maxWebhookBody) + `"}`, "application/json", "", "", 400},
+		{"http URL", `{"webhookURL":"http://example.invalid/secret"}`, "application/json", "", "", 400},
+		{"userinfo", `{"webhookURL":"https://user:secret@example.invalid"}`, "application/json", "", "", 400},
+		{"fragment", `{"webhookURL":"` + initial + `#secret"}`, "application/json", "", "", 400},
+		{"invalid URL", `{"webhookURL":"https://example.invalid/%secret"}`, "application/json", "", "", 400},
+		{"same origin", valid, "application/json", "http://localhost", "same-origin", 200},
+		{"absent origin", valid, "application/json", "", "", 200},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest("PUT", "http://localhost/api/settings/webhook", strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", tc.contentType)
+			if tc.origin != "" {
+				req.Header.Set("Origin", tc.origin)
+			}
+			req.Header.Set("Sec-Fetch-Site", tc.site)
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			if w.Code != tc.status || w.Header().Get("Cache-Control") != "no-store" || strings.Contains(w.Body.String(), "secret") || strings.Contains(w.Body.String(), server.URL) {
+				t.Fatalf("response=%d %s", w.Code, w.Body.String())
+			}
+			if got, err := store.Webhook(context.Background(), job.Topic); err != nil || got != initial {
+				t.Fatal("无效请求改变了设置")
+			}
+		})
+	}
+	for _, origins := range [][]string{{""}, {"http://localhost", "http://localhost"}, {"http://localhost#"}} {
+		req := httptest.NewRequest("PUT", "http://localhost/api/settings/webhook", strings.NewReader(valid))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header["Origin"] = origins
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != 403 {
+			t.Fatalf("非法Origin被接受: %d", w.Code)
+		}
+	}
+	for _, method := range []string{"POST", "DELETE", "HEAD", "PATCH", "OPTIONS"} {
+		w := request(handler, method, "/api/settings/webhook", "")
+		if w.Code != 405 || w.Header().Get("Allow") != "GET, PUT" {
+			t.Fatalf("method=%s status=%d allow=%s", method, w.Code, w.Header().Get("Allow"))
+		}
+	}
+}
+
+func TestWebhookSettingsRejectReboundHost(t *testing.T) {
+	store, handler := testHandler(t)
+	ctx := context.Background()
+	const initial = "https://example.invalid/original"
+	if err := store.SetWebhook(ctx, job.Topic, initial); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		host string
+		want int
+	}{
+		{"localhost", 200}, {"localhost:8080", 200}, {"LOCALHOST:18081", 200},
+		{"127.0.0.1:8080", 200}, {"127.0.0.2:8080", 200}, {"[::1]:8080", 200}, {"[::1]", 200},
+		{"attacker.invalid:8080", 403}, {"localhost.attacker.invalid:8080", 403},
+		{"localhost.:8080", 403}, {"192.168.1.10:8080", 403}, {"0.0.0.0:8080", 403},
+		{"localhost:bad", 403}, {"localhost:65536", 403}, {"localhost:0", 403},
+	} {
+		for _, withOrigin := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/origin=%t", tc.host, withOrigin), func(t *testing.T) {
+				req := httptest.NewRequest("PUT", "/api/settings/webhook", strings.NewReader(`{"webhookURL":""}`))
+				req.Host = tc.host
+				req.Header.Set("Content-Type", "application/json")
+				req.Header.Set("Sec-Fetch-Site", "same-origin")
+				if withOrigin {
+					req.Header.Set("Origin", "http://"+tc.host)
+				}
+				if err := store.SetWebhook(ctx, job.Topic, initial); err != nil {
+					t.Fatal(err)
+				}
+				w := httptest.NewRecorder()
+				handler.ServeHTTP(w, req)
+				if w.Code != tc.want {
+					t.Fatalf("status=%d want=%d", w.Code, tc.want)
+				}
+				got, err := store.Webhook(ctx, job.Topic)
+				if err != nil || (tc.want == 403 && got != initial) || (tc.want == 200 && got != "") {
+					t.Fatal("Host 校验后的设置与预期不符")
+				}
+			})
+		}
+	}
 }
 
 func TestJSONContractAndOldArxivID(t *testing.T) {

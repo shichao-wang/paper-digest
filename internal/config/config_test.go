@@ -83,6 +83,29 @@ func TestWebhookRequiresValidHTTPSWithoutEchoingSecret(t *testing.T) {
 	}
 }
 
+func TestDeliveryRequiresConfiguredTopicIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name, topics string
+		valid        bool
+	}{
+		{"other-topic", `[{"id":"another","webhook_url":"https://example.com/private-secret"}]`, false},
+		{"misspelled-topic", `[{"id":"recommendation-advertising-seach"}]`, false},
+		{"correct-topic-without-webhook", `[{"id":"recommendation-advertising-search"}]`, true},
+		{"correct-topic-among-others", `[{"id":"another"},{"id":"recommendation-advertising-search"}]`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := loadFixture(t, `{"delivery":{"enabled":true},"anthropic":{"api_key":"private-secret"},"arxiv":{"lookback_days":7},"topics":`+tc.topics+`}`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = cfg.ValidateDelivery(currentTopic)
+			if (err == nil) != tc.valid || (err != nil && strings.Contains(err.Error(), "private-secret")) {
+				t.Fatalf("主题校验错误: valid=%v err=%v", tc.valid, err)
+			}
+		})
+	}
+}
+
 func TestDeliveryRequiresFileCredentialsOnlyWhenEnabled(t *testing.T) {
 	cfg, err := loadFixture(t, `{"arxiv":{"lookback_days":7},"topics":[{"id":"recommendation-advertising-search","webhook_url":""}]}`)
 	if err != nil {
@@ -91,12 +114,12 @@ func TestDeliveryRequiresFileCredentialsOnlyWhenEnabled(t *testing.T) {
 	if cfg.Delivery.Enabled {
 		t.Fatal("未配置的投递必须默认关闭")
 	}
-	if _, err := cfg.ValidateDelivery(currentTopic); err == nil || !strings.Contains(err.Error(), "anthropic.api_key") {
+	if err := cfg.ValidateDelivery(currentTopic); err == nil || !strings.Contains(err.Error(), "anthropic.api_key") {
 		t.Fatalf("缺少密钥应拒绝: %v", err)
 	}
 	cfg.Anthropic.APIKey = "private-secret"
-	if _, err := cfg.ValidateDelivery(currentTopic); err == nil || strings.Contains(err.Error(), "private-secret") {
-		t.Fatalf("缺少 Webhook 应拒绝且不泄漏密钥: %v", err)
+	if err := cfg.ValidateDelivery(currentTopic); err != nil {
+		t.Fatalf("有 API 密钥和已登记主题即可启动，Webhook 允许页面配置: %v", err)
 	}
 	if _, err := cfg.DatabasePath(); err == nil {
 		t.Fatal("缺少数据库路径应拒绝")

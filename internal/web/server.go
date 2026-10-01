@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
+	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"path"
@@ -13,12 +16,17 @@ import (
 	"strings"
 	"time"
 
+	"github.com/shichao-wang/paper-digest/internal/config"
 	"github.com/shichao-wang/paper-digest/internal/job"
 	"github.com/shichao-wang/paper-digest/internal/state"
 )
 
+type Options struct {
+	DeliveryEnabled bool
+}
+
 // New 使用共享 Store 与静态资源目录；调用方管理生命周期，创建 handler 不打开数据库。
-func New(store *state.Store, staticFS fs.FS) (http.Handler, error) {
+func New(store *state.Store, staticFS fs.FS, options ...Options) (http.Handler, error) {
 	if store == nil || staticFS == nil {
 		return nil, errors.New("web: store and static filesystem are required")
 	}
@@ -31,26 +39,39 @@ func New(store *state.Store, staticFS fs.FS) (http.Handler, error) {
 		return nil, fmt.Errorf("web: read static index.html: %w", err)
 	}
 	s := &server{store: store, staticFS: staticFS, files: http.FileServer(http.FS(staticFS))}
+	if len(options) > 0 {
+		s.deliveryEnabled = options[0].DeliveryEnabled
+	}
 	return http.HandlerFunc(s.serveHTTP), nil
 }
 
 type server struct {
-	store    *state.Store
-	staticFS fs.FS
-	files    http.Handler
+	store           *state.Store
+	staticFS        fs.FS
+	files           http.Handler
+	deliveryEnabled bool
 }
 
 func (s *server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	if r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/") {
-		if r.Method != http.MethodGet {
-			w.Header().Set("Allow", "GET")
+		allowed := "GET"
+		settings := r.URL.Path == "/api/settings/webhook"
+		if settings {
+			allowed = "GET, PUT"
+		}
+		if r.Method != http.MethodGet && !(settings && r.Method == http.MethodPut) {
+			w.Header().Set("Allow", allowed)
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
 		r = r.WithContext(ctx)
+		if settings {
+			s.webhookSettings(w, r)
+			return
+		}
 		s.api(w, r)
 		return
 	}
@@ -165,6 +186,120 @@ func (s *server) api(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, value)
+}
+
+const maxWebhookBody = 16 << 10
+
+func (s *server) webhookSettings(w http.ResponseWriter, r *http.Request) {
+	var webhook string
+	var err error
+	if r.Method == http.MethodPut {
+		if !sameOrigin(r) {
+			writeError(w, http.StatusForbidden, "same-origin request required")
+			return
+		}
+		mediaType, _, parseErr := mime.ParseMediaType(r.Header.Get("Content-Type"))
+		if parseErr != nil || mediaType != "application/json" {
+			writeError(w, http.StatusUnsupportedMediaType, "application/json required")
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, maxWebhookBody)
+		webhook, err = decodeWebhook(r.Body)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid webhook settings")
+			return
+		}
+		webhook = strings.TrimSpace(webhook)
+		if webhook != "" && config.ValidateWebhookURL(webhook) != nil {
+			writeError(w, http.StatusBadRequest, "invalid webhook settings")
+			return
+		}
+		err = s.store.SetWebhook(r.Context(), job.Topic, webhook)
+	} else {
+		webhook, err = s.store.Webhook(r.Context(), job.Topic)
+	}
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "service unavailable")
+		return
+	}
+	writeJSON(w, http.StatusOK, struct {
+		Topic           string `json:"topic"`
+		Configured      bool   `json:"configured"`
+		DeliveryEnabled bool   `json:"deliveryEnabled"`
+	}{job.Topic, webhook != "", s.deliveryEnabled})
+}
+
+// 精确字段名、单个对象、无重复字段，避免宽松解码把误填字段当成清除。
+func decodeWebhook(body io.Reader) (string, error) {
+	invalid := errors.New("invalid webhook settings")
+	decoder := json.NewDecoder(body)
+	token, err := decoder.Token()
+	if err != nil || token != json.Delim('{') {
+		return "", invalid
+	}
+	if !decoder.More() {
+		return "", invalid
+	}
+	key, err := decoder.Token()
+	if err != nil || key != "webhookURL" {
+		return "", invalid
+	}
+	var value *string
+	if err := decoder.Decode(&value); err != nil || value == nil || decoder.More() {
+		return "", invalid
+	}
+	if token, err := decoder.Token(); err != nil || token != json.Delim('}') {
+		return "", invalid
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return "", invalid
+	}
+	return *value, nil
+}
+
+func localSettingsHost(authority string) bool {
+	host := authority
+	if strings.HasPrefix(authority, "[") && strings.HasSuffix(authority, "]") {
+		host = strings.TrimSuffix(strings.TrimPrefix(authority, "["), "]")
+	} else if strings.Contains(authority, ":") {
+		var port string
+		var err error
+		host, port, err = net.SplitHostPort(authority)
+		if err != nil {
+			return false
+		}
+		number, err := strconv.ParseUint(port, 10, 16)
+		if err != nil || number == 0 {
+			return false
+		}
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func sameOrigin(r *http.Request) bool {
+	// Host 必须独立限定为本机，不能只相信 Origin 与 Host 的相互一致。
+	// 不做 DNS 解析，防止攻击者域名重绑定到回环地址后修改设置。
+	if !localSettingsHost(r.Host) {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")), "cross-site") {
+		return false
+	}
+	origins, exists := r.Header["Origin"]
+	if !exists {
+		return true
+	}
+	if len(origins) != 1 {
+		return false
+	}
+	origin, err := url.Parse(origins[0])
+	return err == nil && (origin.Scheme == "http" || origin.Scheme == "https") && origin.Host != "" &&
+		origin.User == nil && origin.Path == "" && origin.RawQuery == "" && !origin.ForceQuery && origin.Fragment == "" && !strings.Contains(origins[0], "#") &&
+		strings.EqualFold(origin.Host, r.Host)
 }
 
 func pagination(values url.Values) (state.PageQuery, error) {

@@ -110,6 +110,24 @@ h1, h2, h3, p { margin-top: 0; }
 .digest-message .summary-text { color: #34455b; font-size: 13px; }
 .notice { font-size: 12px; line-height: 1.8; padding: 12px 16px; background: #f8eddb; color: #77520c; border-radius: 4px; }
 .footer { display: flex; justify-content: space-between; gap: 8px 20px; flex-wrap: wrap; font-size: 10px; color: var(--muted); padding: 17px 0 24px; }
+.settings-panel { max-width: 760px; background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 32px; margin-bottom: 32px; }
+.settings-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; border-bottom: 1px solid var(--border); padding-bottom: 24px; margin-bottom: 26px; }
+.settings-heading h3 { font-size: 18px; font-weight: 600; margin-bottom: 10px; }
+.settings-heading p, .field-help { font-size: 13px; line-height: 1.8; color: var(--muted); margin-bottom: 0; }
+.webhook-label { display: block; font-size: 14px; font-weight: 550; margin-bottom: 8px; }
+.field-help { margin-bottom: 14px; }
+.webhook-input { width: 100%; min-width: 0; background: #fafbfd; border: 1px solid var(--border); border-radius: 5px; padding: 13px 12px; font-size: 13px; }
+.webhook-input::placeholder { color: #68788c; }
+.settings-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 18px; }
+.primary { background: var(--blue); color: white; border: 1px solid var(--blue); border-radius: 5px; padding: 10px 16px; font-size: 13px; }
+.text-button { background: transparent; border: 0; padding: 8px 10px; color: var(--blue); font-size: 13px; }
+.clear-confirm { padding: 16px; border-radius: 5px; background: #f8eddb; color: #77520c; margin-top: 22px; }
+.clear-confirm p { font-size: 13px; line-height: 1.8; margin-bottom: 0; }
+.settings-feedback { color: var(--blue); font-size: 13px; line-height: 1.8; margin: 22px 0 0; }
+.settings-feedback.notice { color: #77520c; }
+.settings-notes { border-top: 1px solid var(--border); padding-top: 22px; margin-top: 28px; }
+.settings-notes p { font-size: 12px; color: var(--muted); line-height: 1.9; margin-bottom: 6px; }
+.settings-notes p:last-child { margin-bottom: 0; }
 .mobile-back { display: none; }
 @media (min-width: 1600px) { .app-shell { padding: 0 55px; } }
 @media (max-width: 1050px) {
@@ -150,6 +168,10 @@ h1, h2, h3, p { margin-top: 0; }
   .dates { gap: 10px 16px; }
   .footer { font-size: 10px; line-height: 1.6; }
   .summary-text { font-size: 14px; }
+  .settings-panel { padding: 24px 21px; }
+  .settings-heading { gap: 12px; }
+  .settings-heading p { font-size: 12px; }
+  .settings-actions button { min-height: 42px; }
   .abstract-text { font-size: 14px; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; } }
