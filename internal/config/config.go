@@ -27,8 +27,9 @@ type Config struct {
 		Enabled bool `json:"enabled"`
 	} `json:"delivery"`
 	Anthropic struct {
-		APIKey string `json:"api_key"`
-		Model  string `json:"model"`
+		APIKey  string `json:"api_key"`
+		Model   string `json:"model"`
+		BaseURL string `json:"base_url"`
 	} `json:"anthropic"`
 	Arxiv struct {
 		LookbackDays int `json:"lookback_days"`
@@ -62,6 +63,13 @@ func Load(path string) (Config, error) {
 			return Config{}, errors.New("主题 ID 重复")
 		}
 		seen[topic.ID] = true
+	}
+	if baseURL := strings.TrimSpace(cfg.Anthropic.BaseURL); baseURL != "" {
+		parsed, err := url.Parse(baseURL)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" || parsed.User != nil || parsed.Fragment != "" || parsed.RawQuery != "" {
+			return Config{}, errors.New("anthropic.base_url 必须是有效的 HTTP 或 HTTPS 服务地址，不能包含凭据、查询参数或片段")
+		}
+		cfg.Anthropic.BaseURL = baseURL
 	}
 	if cfg.Arxiv.LookbackDays < 1 || cfg.Arxiv.LookbackDays > 30 {
 		return Config{}, errors.New("arxiv.lookback_days 必须为 1 到 30")

@@ -141,7 +141,7 @@ func run(args []string) error {
 				defer cancel()
 				return papers.Fetch(fetchCtx, &http.Client{Timeout: 40 * time.Second}, "", 100)
 			},
-			Analyzer:     digest.ClaudeAnalyzer{Model: model, APIKey: cfg.Anthropic.APIKey},
+			Analyzer:     digest.ClaudeAnalyzer{Model: model, APIKey: cfg.Anthropic.APIKey, BaseURL: cfg.Anthropic.BaseURL},
 			Sender:       delivery.Feishu{WebhookURL: webhook},
 			LookbackDays: cfg.Arxiv.LookbackDays,
 			Now:          time.Now,
