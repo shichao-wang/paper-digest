@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/shichao-wang/paper-digest/internal/delivery"
 	"github.com/shichao-wang/paper-digest/internal/papers"
 )
 
@@ -71,6 +72,45 @@ func TestServeWaitsForBackgroundWorkAndDeliveryOutcome(t *testing.T) {
 				t.Fatal("delivery final state not saved before Serve returned")
 			}
 		})
+	}
+}
+
+func TestNoWebhookDoesNotBecomeUnknownOrSendAfterWindow(t *testing.T) {
+	r := testRunner(t)
+	ctx := context.Background()
+	date := BeijingDate(r.Now())
+	if err := r.Generate(ctx, date); err != nil {
+		t.Fatal(err)
+	}
+	read := make(chan struct{})
+	r.Sender = delivery.StoredFeishu{Store: webhookReadStore{store: r.Store, read: read}, Topic: Topic}
+	r.Now = func() time.Time { return time.Date(2026, 9, 27, 9, 0, 0, 0, beijing()) }
+	wait, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- r.Serve(wait, slog.New(slog.NewTextHandler(io.Discard, nil))) }()
+	select {
+	case <-read:
+	case <-time.After(time.Second):
+		cancel()
+		t.Fatal("scheduler未读取地址")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("scheduler未停止")
+	}
+	if jobStatus(t, r, date) != "ready" {
+		t.Fatal("缺地址不得标记unknown")
+	}
+	r.Now = func() time.Time { return time.Date(2026, 9, 27, 9, 1, 0, 0, beijing()) }
+	calls := 0
+	r.Sender = senderFunc(func(context.Context, string) error { calls++; return nil })
+	wait, cancel = context.WithTimeout(ctx, 100*time.Millisecond)
+	defer cancel()
+	_ = r.Serve(wait, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if calls != 0 || jobStatus(t, r, date) != "missed" {
+		t.Fatal("错过窗口不得补发")
 	}
 }
 

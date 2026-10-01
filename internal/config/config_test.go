@@ -91,12 +91,12 @@ func TestDeliveryRequiresFileCredentialsOnlyWhenEnabled(t *testing.T) {
 	if cfg.Delivery.Enabled {
 		t.Fatal("未配置的投递必须默认关闭")
 	}
-	if _, err := cfg.ValidateDelivery(currentTopic); err == nil || !strings.Contains(err.Error(), "anthropic.api_key") {
+	if err := cfg.ValidateDelivery(); err == nil || !strings.Contains(err.Error(), "anthropic.api_key") {
 		t.Fatalf("缺少密钥应拒绝: %v", err)
 	}
 	cfg.Anthropic.APIKey = "private-secret"
-	if _, err := cfg.ValidateDelivery(currentTopic); err == nil || strings.Contains(err.Error(), "private-secret") {
-		t.Fatalf("缺少 Webhook 应拒绝且不泄漏密钥: %v", err)
+	if err := cfg.ValidateDelivery(); err != nil {
+		t.Fatalf("有 API 密钥即可启动，Webhook 允许页面配置: %v", err)
 	}
 	if _, err := cfg.DatabasePath(); err == nil {
 		t.Fatal("缺少数据库路径应拒绝")

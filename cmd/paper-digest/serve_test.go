@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -57,6 +59,70 @@ func fixtureFS() fstest.MapFS {
 	return fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("fixture")}}
 }
 
+func TestServeSettingsMigratedBeforeStartupAndAllowMissingWebhook(t *testing.T) {
+	for _, configured := range []bool{false, true} {
+		t.Run(fmt.Sprint(configured), func(t *testing.T) {
+			cfg := serveConfig(filepath.Join(t.TempDir(), "settings.db"), true)
+			robot := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Error("启动不应发送") }))
+			defer robot.Close()
+			cfg.Topics[0].WebhookURL = ""
+			if configured {
+				cfg.Topics[0].WebhookURL = "  " + robot.URL + "/secret  "
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			address := make(chan string, 1)
+			result := make(chan error, 1)
+			go func() {
+				result <- serve(ctx, cfg, serveOptions{Listen: "127.0.0.1:0"}, serveDependencies{
+					StaticFS: fixtureFS(),
+					NewWorker: func(_ config.Config, store *state.Store) (worker, error) {
+						webhook, err := store.Webhook(ctx, job.Topic)
+						if err != nil || (webhook != "") != configured {
+							return nil, errors.New("迁移未在worker初始化之前完成")
+						}
+						return workerFunc(func(ctx context.Context, _ *slog.Logger) error { <-ctx.Done(); return ctx.Err() }), nil
+					},
+					Listen: func(network, addr string) (net.Listener, error) {
+						listener, err := net.Listen(network, addr)
+						if err == nil {
+							address <- listener.Addr().String()
+						}
+						return listener, err
+					},
+				})
+			}()
+			var addr string
+			select {
+			case addr = <-address:
+			case err := <-result:
+				t.Fatalf("启动失败: %v", err)
+			case <-time.After(time.Second):
+				t.Fatal("未启动HTTP")
+			}
+			client := &http.Client{Timeout: time.Second}
+			response, err := client.Get("http://" + addr + "/api/settings/webhook")
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, err := io.ReadAll(response.Body)
+			response.Body.Close()
+			if err != nil || response.StatusCode != 200 || !strings.Contains(string(body), `"configured":`+fmt.Sprint(configured)) || !strings.Contains(string(body), `"deliveryEnabled":true`) || strings.Contains(string(body), "secret") {
+				t.Fatalf("settings=%d %s %v", response.StatusCode, body, err)
+			}
+			cancel()
+			select {
+			case err := <-result:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("服务未停止")
+			}
+		})
+	}
+}
+
 func TestDisabledServeUsesHTTPWithoutWorkerOrRecovery(t *testing.T) {
 	path := sendingDatabase(t)
 	cfg := serveConfig(path, false)
@@ -69,7 +135,7 @@ func TestDisabledServeUsesHTTPWithoutWorkerOrRecovery(t *testing.T) {
 	go func() {
 		result <- serve(ctx, cfg, serveOptions{Listen: "127.0.0.1:0"}, serveDependencies{
 			StaticFS: fixtureFS(),
-			NewWorker: func(config.Config, *state.Store, string) (worker, error) {
+			NewWorker: func(config.Config, *state.Store) (worker, error) {
 				return nil, errors.New("disabled unexpectedly constructed worker")
 			},
 			Listen: func(network, address string) (net.Listener, error) {
@@ -129,7 +195,7 @@ func TestEnabledServeRecoversOnceAndKeepsStoreOpenUntilWorkerFinishes(t *testing
 	var shared *state.Store
 	go func() {
 		result <- serve(ctx, serveConfig(path, true), serveOptions{Listen: "127.0.0.1:0"}, serveDependencies{
-			StaticFS: fixtureFS(), NewWorker: func(_ config.Config, store *state.Store, _ string) (worker, error) {
+			StaticFS: fixtureFS(), NewWorker: func(_ config.Config, store *state.Store) (worker, error) {
 				shared = store
 				return workerFunc(func(ctx context.Context, _ *slog.Logger) error {
 					saved, err := store.GetJob(ctx, job.Topic, "2026-09-29")
@@ -193,7 +259,7 @@ func TestServeStartupFailuresDoNotRecoverOrStartWorker(t *testing.T) {
 	for _, kind := range []string{"index", "factory", "listen"} {
 		t.Run(kind, func(t *testing.T) {
 			path := sendingDatabase(t)
-			deps := serveDependencies{StaticFS: fixtureFS(), NewWorker: func(config.Config, *state.Store, string) (worker, error) {
+			deps := serveDependencies{StaticFS: fixtureFS(), NewWorker: func(config.Config, *state.Store) (worker, error) {
 				if kind == "factory" {
 					return nil, errors.New("factory failure")
 				}
@@ -232,7 +298,7 @@ func TestHTTPFailureCancelsWorkerAndJoinsFinalWrite(t *testing.T) {
 			listener, err := net.Listen(network, address)
 			return failingListener{listener}, err
 		},
-		NewWorker: func(_ config.Config, store *state.Store, _ string) (worker, error) {
+		NewWorker: func(_ config.Config, store *state.Store) (worker, error) {
 			shared = store
 			return workerFunc(func(ctx context.Context, _ *slog.Logger) error {
 				<-ctx.Done()
@@ -265,7 +331,7 @@ func TestWorkerFailureStopsHTTPAndClosesStore(t *testing.T) {
 	var shared *state.Store
 	expected := errors.New("worker failure")
 	err := serve(context.Background(), serveConfig(path, true), serveOptions{Listen: "127.0.0.1:0"}, serveDependencies{
-		StaticFS: fixtureFS(), NewWorker: func(_ config.Config, store *state.Store, _ string) (worker, error) {
+		StaticFS: fixtureFS(), NewWorker: func(_ config.Config, store *state.Store) (worker, error) {
 			shared = store
 			return workerFunc(func(context.Context, *slog.Logger) error { return expected }), nil
 		},
@@ -275,6 +341,31 @@ func TestWorkerFailureStopsHTTPAndClosesStore(t *testing.T) {
 	}
 	if err := shared.Health(context.Background()); err == nil {
 		t.Fatal("worker failure left store open")
+	}
+}
+
+func TestStatusAndBackupDoNotMigrateWebhookSettings(t *testing.T) {
+	path := sendingDatabase(t)
+	robot := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Error("查询不得发送请求") }))
+	defer robot.Close()
+	args := configArgs(t, path, robot.URL+"/secret", "", false)
+	if err := run(append(append([]string{}, args...), "status", "2026-09-29")); err != nil {
+		t.Fatal(err)
+	}
+	backup := filepath.Join(t.TempDir(), "backup.db")
+	if err := run(append(append([]string{}, args...), "backup", backup)); err != nil {
+		t.Fatal(err)
+	}
+	for _, database := range []string{path, backup} {
+		store, err := state.Open(database)
+		if err != nil {
+			t.Fatal(err)
+		}
+		webhook, err := store.Webhook(context.Background(), "another")
+		store.Close()
+		if err != nil || webhook != "" {
+			t.Fatal("查询命令不应迁移JSON地址")
+		}
 	}
 }
 

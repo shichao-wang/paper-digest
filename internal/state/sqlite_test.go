@@ -3,14 +3,104 @@ package state
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
+	"github.com/shichao-wang/paper-digest/internal/config"
 	"github.com/shichao-wang/paper-digest/internal/digest"
 	"github.com/shichao-wang/paper-digest/internal/papers"
 )
+
+func TestExistingDatabaseGetsWebhookTableWithoutChangingJobs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.sqlite")
+	ctx := context.Background()
+	store := openTestStore(t, path)
+	if _, err := store.ClaimDay(ctx, "topic", "2026-09-27"); err != nil {
+		t.Fatal(err)
+	}
+	// 模拟原有数据库：只有日报相关表，没有新设置表。
+	if _, err := store.db.Exec(`DROP TABLE topic_webhooks`); err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+	store = openTestStore(t, path)
+	defer store.Close()
+	if err := store.SetWebhook(ctx, "topic", ""); err != nil {
+		t.Fatal(err)
+	}
+	if current, err := store.GetJob(ctx, "topic", "2026-09-27"); err != nil || current.Status != statusNew {
+		t.Fatalf("schema升级影响旧job: %+v %v", current, err)
+	}
+}
+
+func TestWebhookMigrationPersistenceAndClear(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "state.sqlite")
+	store := openTestStore(t, path)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("存储与迁移不得发送请求")
+	}))
+	defer server.Close()
+	topics := []config.Topic{
+		{ID: "topic-a", WebhookURL: "  " + server.URL + "/secret-a  "},
+		{ID: "topic-b", WebhookURL: server.URL + "/secret-b"},
+		{ID: "empty", WebhookURL: " "},
+		{ID: "invalid", WebhookURL: "http://example.invalid/secret"},
+		{ID: "credentials", WebhookURL: "https://user:secret@example.invalid"},
+		{ID: "fragment", WebhookURL: server.URL + "#secret"},
+	}
+	for i := 0; i < 2; i++ {
+		if err := store.MigrateWebhooks(ctx, topics); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for topic, want := range map[string]string{"topic-a": server.URL + "/secret-a", "topic-b": server.URL + "/secret-b", "empty": "", "invalid": "", "missing": "", "credentials": "", "fragment": ""} {
+		if got, err := store.Webhook(ctx, topic); err != nil || got != want {
+			t.Fatalf("topic=%s err=%v unexpected webhook", topic, err)
+		}
+	}
+	var count int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM topic_webhooks`).Scan(&count); err != nil || count != 2 {
+		t.Fatalf("migration count=%d err=%v", count, err)
+	}
+	if err := store.SetWebhook(ctx, "topic-a", "  "); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetWebhook(ctx, "topic-b", "  "+server.URL+"/updated  "); err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+	store = openTestStore(t, path)
+	defer store.Close()
+	if err := store.MigrateWebhooks(ctx, topics); err != nil {
+		t.Fatal(err)
+	}
+	for topic, want := range map[string]string{"topic-a": "", "topic-b": server.URL + "/updated"} {
+		if got, err := store.Webhook(ctx, topic); err != nil || got != want {
+			t.Fatalf("持久化或迁移覆盖了设置: topic=%s err=%v", topic, err)
+		}
+	}
+	for _, value := range []string{"http://example.invalid/secret", "https://user:secret@example.invalid", "https://example.invalid/#secret"} {
+		if err := store.SetWebhook(ctx, "topic-a", value); err == nil || strings.Contains(err.Error(), "secret") {
+			t.Fatalf("invalid URL/error leakage: %v", err)
+		}
+	}
+	store.Close()
+	if err := store.SetWebhook(ctx, "topic-a", server.URL+"/secret"); err == nil || strings.Contains(err.Error(), "secret") {
+		t.Fatalf("save error leakage: %v", err)
+	}
+	if _, err := store.Webhook(ctx, "topic-a"); err == nil {
+		t.Fatal("关闭数据库应返回读错误")
+	}
+	if err := store.MigrateWebhooks(ctx, topics); err == nil {
+		t.Fatal("关闭数据库应返回迁移错误")
+	}
+}
 
 func TestClaimDayUsesTopicAndDateUniqueness(t *testing.T) {
 	ctx := context.Background()

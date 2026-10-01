@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useLocation, useRequest } from './hooks'
 import type { Digest, DigestDetail, Page, Paper } from './types'
+import WebhookSettings from './WebhookSettings'
 
 const statusLabels: Record<string, string> = {
   new: '待生成', processing: '生成中', ready: '已生成', sending: '发送中',
@@ -41,6 +42,7 @@ function PaperDetail({ paper, onBack }: { paper: Paper; onBack: () => void }) {
 export default function App() {
   const { params, navigate } = useLocation()
   const historyView = params.get('view') === 'digests'
+  const settingsView = params.get('view') === 'settings'
   const query = params.get('q') || ''
   const date = params.get('date') || ''
   const summary = ['available', 'missing'].includes(params.get('summary') || '') ? params.get('summary')! : 'all'
@@ -52,14 +54,14 @@ export default function App() {
   const returnFocus = useRef<HTMLButtonElement | null>(null)
   useEffect(() => { setInput(query) }, [query])
   const listQuery = new URLSearchParams({ q: query, date, summary, page: String(page), pageSize: '20' })
-  const papers = useRequest<Page<Paper>>(historyView ? null : `/api/papers?${listQuery}`)
+  const papers = useRequest<Page<Paper>>(historyView || settingsView ? null : `/api/papers?${listQuery}`)
   const digests = useRequest<Page<Digest>>(historyView ? `/api/digests?page=${page}&pageSize=20` : null)
   const selectedID = params.get('paper') || ''
   const selectedDate = params.get('paperDate') || ''
   const explicitPaper = !!selectedID && !!selectedDate
   const selectedPaper = explicitPaper ? { id: selectedID, digestDate: selectedDate } : papers.data?.items[0]
   const detailQuery = selectedPaper ? new URLSearchParams({ id: selectedPaper.id, date: selectedPaper.digestDate }) : null
-  const paperDetail = useRequest<Paper>(!historyView && detailQuery ? `/api/papers/detail?${detailQuery}` : null)
+  const paperDetail = useRequest<Paper>(!historyView && !settingsView && detailQuery ? `/api/papers/detail?${detailQuery}` : null)
   const selectedDigest = params.get('digest') || digests.data?.items[0]?.date || ''
   const digestDetail = useRequest<DigestDetail>(historyView && selectedDigest ? `/api/digests/${encodeURIComponent(selectedDigest)}` : null)
   const explicitDigest = historyView && !!params.get('digest')
@@ -96,13 +98,14 @@ export default function App() {
   const selectedKey = selectedPaper ? `${selectedPaper.id}/${selectedPaper.digestDate}` : ''
 
   return <div className="app-shell">
-    <a className="skip-link" href="#main-content">跳到论文内容</a>
+    <a className="skip-link" href="#main-content">跳到主要内容</a>
     <header className="header">
       <div className="brand"><div className="brand-mark" aria-hidden="true"><i /><i /><i /></div><div><h1>论文日报</h1><p>Recommendation / Advertising / Search</p></div></div>
-      <nav aria-label="主导航"><button aria-current={!historyView ? 'page' : undefined} onClick={() => navigate({ view: null, page: null, paper: null, paperDate: null, digest: null })}>论文库</button><button aria-current={historyView ? 'page' : undefined} onClick={() => navigate({ view: 'digests', page: null, paper: null, paperDate: null, digest: null })}>日报历史</button></nav>
+      <nav aria-label="主导航"><button aria-current={!historyView && !settingsView ? 'page' : undefined} onClick={() => navigate({ view: null, page: null, paper: null, paperDate: null, digest: null })}>论文库</button><button aria-current={historyView ? 'page' : undefined} onClick={() => navigate({ view: 'digests', page: null, paper: null, paperDate: null, digest: null })}>日报历史</button><button aria-current={settingsView ? 'page' : undefined} onClick={() => navigate({ view: 'settings', page: null, paper: null, paperDate: null, digest: null })}>设置</button></nav>
     </header>
     <main id="main-content">
-      <div className="page-heading"><div><h2>{historyView ? '日报历史' : '论文库'}</h2><p>{historyView ? '按日期回看每天的精选论文与日报。' : '每日精选，留待细读。按最近入选日期排列。'}</p></div><span className="local-label"><span aria-hidden="true" />本机阅读</span></div>
+      <div className="page-heading"><div><h2>{settingsView ? '设置' : historyView ? '日报历史' : '论文库'}</h2><p>{settingsView ? '管理日报的飞书推送地址。' : historyView ? '按日期回看每天的精选论文与日报。' : '每日精选，留待细读。按最近入选日期排列。'}</p></div><span className="local-label"><span aria-hidden="true" />{settingsView ? '本机配置' : '本机阅读'}</span></div>
+      {settingsView ? <WebhookSettings /> : <>
       {!historyView && <form className="filters" onSubmit={event => { event.preventDefault(); filter({ q: input.trim() }) }}>
         <label className="search-field"><span className="sr-only">搜索标题、作者或摘要</span><svg width="19" height="19" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" stroke="currentColor" strokeWidth="1.7" /><path d="m16 16 5 5" stroke="currentColor" strokeWidth="1.7" /></svg><input type="search" placeholder="搜索标题、作者或摘要" value={input} onChange={event => setInput(event.target.value)} /><button type="submit">搜索</button></label>
         <label className="filter-field"><span>日报日期</span><input type="date" value={date} onChange={event => filter({ date: event.target.value })} /></label>
@@ -150,6 +153,7 @@ export default function App() {
         </div>
       </div>
       <footer className="footer"><span>内容来自 arXiv 公开摘要</span><span>中文要点由模型生成，请结合原文判断。</span></footer>
+      </>}
     </main>
   </div>
 }

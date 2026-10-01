@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/shichao-wang/paper-digest/internal/config"
 	"github.com/shichao-wang/paper-digest/internal/digest"
 	"github.com/shichao-wang/paper-digest/internal/papers"
 	_ "modernc.org/sqlite"
@@ -107,6 +108,10 @@ func (s *Store) initialize(ctx context.Context) error {
 		return fmt.Errorf("enable sqlite foreign keys: %w", err)
 	}
 	const schema = `
+CREATE TABLE IF NOT EXISTS topic_webhooks (
+	topic TEXT PRIMARY KEY NOT NULL,
+	webhook_url TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS jobs (
 	topic TEXT NOT NULL,
 	date TEXT NOT NULL,
@@ -155,6 +160,58 @@ func (s *Store) RecoverInterruptedSends(ctx context.Context) error {
 	// 进程可能在记录发送意图后、记录结果前退出；重启 worker 后禁止自动重发。
 	if _, err := s.db.ExecContext(ctx, `UPDATE jobs SET status = ? WHERE status = ?`, statusUnknown, statusSending); err != nil {
 		return fmt.Errorf("recover interrupted sends: %w", err)
+	}
+	return nil
+}
+
+// MigrateWebhooks 仅导入旧 JSON 配置中合法的非空地址；已有空值行代表主动清除。
+func (s *Store) MigrateWebhooks(ctx context.Context, topics []config.Topic) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return errors.New("state: migrate webhooks failed")
+	}
+	defer tx.Rollback()
+	for _, topic := range topics {
+		webhook := strings.TrimSpace(topic.WebhookURL)
+		if topic.ID == "" || webhook == "" || config.ValidateWebhookURL(webhook) != nil {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO topic_webhooks(topic, webhook_url) VALUES(?, ?)
+ON CONFLICT(topic) DO NOTHING`, topic.ID, webhook); err != nil {
+			return errors.New("state: migrate webhooks failed")
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return errors.New("state: migrate webhooks failed")
+	}
+	return nil
+}
+
+// Webhook 以数据库为唯一事实源；缺失行和主动清除均返回空值，不回退至 JSON。
+func (s *Store) Webhook(ctx context.Context, topic string) (string, error) {
+	var webhook string
+	err := s.db.QueryRowContext(ctx, `SELECT webhook_url FROM topic_webhooks WHERE topic = ?`, topic).Scan(&webhook)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", errors.New("state: read webhook failed")
+	}
+	return webhook, nil
+}
+
+func (s *Store) SetWebhook(ctx context.Context, topic, webhook string) error {
+	webhook = strings.TrimSpace(webhook)
+	if webhook != "" {
+		if err := config.ValidateWebhookURL(webhook); err != nil {
+			return err
+		}
+	}
+	if _, err := s.db.ExecContext(ctx, `
+INSERT INTO topic_webhooks(topic, webhook_url) VALUES(?, ?)
+ON CONFLICT(topic) DO UPDATE SET webhook_url = excluded.webhook_url`, topic, webhook); err != nil {
+		return errors.New("state: save webhook failed")
 	}
 	return nil
 }
