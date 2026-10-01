@@ -6,3 +6,7 @@ data/
 backups/
 /paper-digest
 .DS_Store
+.claude/worktrees/
+web/node_modules/
+web/dist/
+web/*.tsbuildinfo

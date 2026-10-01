@@ -155,8 +155,15 @@ func TestInterruptedSendRecoversAsUnknownAndPapersResumeIndividually(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if job.Status != statusUnknown || job.Message != "rendered message" {
-		t.Fatalf("reopened interrupted send as %+v; want unknown with preserved message", job)
+	if job.Status != statusSending || job.Message != "rendered message" {
+		t.Fatalf("opening database changed send intent: %+v", job)
+	}
+	if err := store.RecoverInterruptedSends(ctx); err != nil {
+		t.Fatal(err)
+	}
+	job, err = store.GetJob(ctx, "topic", job.Date)
+	if err != nil || job.Status != statusUnknown || job.Message != "rendered message" {
+		t.Fatalf("worker recovery returned %+v, err=%v; want unknown with preserved message", job, err)
 	}
 	pending, err = store.PendingPapers(ctx, "topic", job.Date)
 	if err != nil || len(pending) != 0 {

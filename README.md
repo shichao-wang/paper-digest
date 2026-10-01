@@ -1,6 +1,6 @@
 # 论文日报
 
-本机 Docker Compose 运行的 Go 服务：每天北京时间 08:00 搜集 Recommendation / Advertising / Search **联合主题**的 arXiv 新论文，根据公开摘要生成中文要点；09:00 仅在日报完整就绪时，通过飞书群机器人 Webhook 发送一份日报。第一版不抓取全文、项目页或解读网页；历史论文、摘要版本、任务与发送状态保存在 SQLite 中。
+本机 Docker Compose 运行的 Go 服务：每天北京时间 08:00 搜集 Recommendation / Advertising / Search **联合主题**的 arXiv 新论文，根据公开摘要生成中文要点；09:00 仅在日报完整就绪时，通过飞书群机器人 Webhook 发送一份日报。第一版不抓取全文、项目页或解读网页；历史论文、摘要版本、任务与发送状态保存在 SQLite 中。浏览器中的「论文库」提供已有每日精选的检索、摘要阅读和日报历史。
 
 > 默认 **不调用模型、不发送飞书**。须自行确认目标群、机器人身份、内容及模型费用后，在未跟踪的 `config/config.json` 中设置 `delivery.enabled=true` 才启用实际任务。现阶段没有做过真实发送或 09:00 投递验收。
 
@@ -15,7 +15,7 @@ docker compose ps
 docker compose logs --tail=100 paper-digest
 ```
 
-不会映射端口；Cloudflare Tunnel 不是日报任务的依赖。Docker Desktop、宿主机和网络必须在任务时段持续在线、未睡眠。Compose 仅运行一个副本，切勿扩为多个定时 worker。代码更新后在非 08:00～09:00 时段运行 `docker compose up -d --build`；容器重建不会删除 `digest-data` 数据卷。不要运行 `docker compose down -v`，那会删除数据。
+本机页面映射至 **http://127.0.0.1:8080**，仅监听宿主机回环地址；Cloudflare Tunnel 不是日报任务的依赖。`delivery.enabled=false` 时页面仍可浏览已有数据，采集、模型和飞书任务保持关闭。Docker Desktop、宿主机和网络必须在任务时段持续在线、未睡眠。Compose 仅运行一个副本，切勿扩为多个定时 worker。代码更新后在非 08:00～09:00 时段运行 `docker compose up -d --build`；容器重建不会删除 `digest-data` 数据卷。不要运行 `docker compose down -v`，那会删除数据。
 
 ```bash
 go test ./...
@@ -26,6 +26,48 @@ go run ./cmd/paper-digest preview ./testdata/preview.json
 # 查看当天任务状态
 docker compose exec paper-digest paper-digest status
 ```
+
+## 论文库与前端开发
+
+启动 Compose 后打开 http://127.0.0.1:8080。论文库支持关键词搜索、日报日期和中文要点状态筛选；选择论文可阅读中文要点和原始英文摘要，或打开 arXiv / PDF。日报历史保留当天论文、正文和生成/发送状态。页面只读，不提供重生成或发送操作。
+
+数据库保存的是每天入选日报的最多 5 篇，**不是全部抓取结果**。论文库按最近入选日报日期排列并合并重复 ID；按日期筛选或从日报进入详情时保留当天的版本和摘要。未完成中文要点的论文仍可浏览。中文要点依据公开摘要生成，不能视为全文解读。空库不会自动填充示例或抓取历史论文。
+
+前端位于 `web/`，使用 React、TypeScript 和 Vite；Docker 自动构建静态资源，由 Go 同源托管。运行时不需要 Node。直接在宿主机开发需要 Node 24 和 Go 1.27：
+
+```bash
+npm --prefix web ci
+```
+
+```bash
+npm --prefix web run build
+```
+
+准备独立的开发配置，保持 `delivery.enabled=false`，将 `database.path` 指向本地可写目录内的 SQLite 文件。不要将容器中的 `/data/digest.db` 路径直接用于宿主机：
+
+```bash
+go run ./cmd/paper-digest --config config/config.json serve
+```
+
+另一个终端启动前端，访问 http://127.0.0.1:5173；Vite 将 `/api` 代理至本机 Go 服务：
+
+```bash
+npm --prefix web run dev
+```
+
+离线查看界面可用 Python 3 创建独立的虚构数据（不会访问 arXiv、模型或飞书，也不会覆盖已存在的演示数据库）：
+
+```bash
+python3 testdata/seed-web-preview.py
+```
+
+```bash
+go run ./cmd/paper-digest --config data/web-preview/config.json serve
+```
+
+脚本只写入被 Git 忽略的 `data/web-preview/`，所有标题均标记 `[Demo]`。实际论文库不加载这些数据。
+
+`serve` 默认监听 `127.0.0.1:8080`，从 `web/dist` 读取资源，可使用 `--listen` 和 `--web-dir` 调整。Go 启动前须先构建静态资源。`health` 无需配置，通过本机 `/api/health` 检查 HTTP 和数据库；服务未运行时返回失败，可使用 `health --url <地址>` 检查其他监听地址。数据库打开和只读查询不会修改发送中的状态；中断发送恢复只在启用日报 worker 时执行。
 
 ## 主题与机器人配置
 
@@ -83,5 +125,7 @@ docker compose cp paper-digest:/data/digest-backup.db ./digest-backup.db
 - `internal/state/`：SQLite 事务、逐篇恢复、发送意图与历史去重。
 - `internal/job/`：北京时间调度与任务执行。
 - `internal/delivery/`：飞书群机器人 Webhook 发送和响应判定。
+- `internal/web/`：只读论文与日报 API、HTTP 健康检查和静态资源服务。
+- `web/`：论文库、详情阅读和日报历史的 React 页面。
 
 本项目是 `repos/` 下的独立 Git 仓库；请始终在本目录内操作 Git，不要将其内容加入 `personal-workspace` 主仓库历史。创建公开远端仓库和推送由所有者另行决定。

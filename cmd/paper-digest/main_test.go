@@ -69,6 +69,45 @@ func TestSendTestUsesSelectedRobotAndFixedMessageWithoutModelOrDatabase(t *testi
 	}
 }
 
+func TestHealthRequiresSuccessfulHTTPAndValidPayload(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		status     int
+		valid      bool
+	}{
+		{"healthy", `{"status":"ok"}`, 200, true},
+		{"unavailable", `{"error":"service unavailable"}`, 503, false},
+		{"html", `<html>wrong service</html>`, 200, false},
+		{"wrong status", `{"status":"down"}`, 200, false},
+		{"trailing data", `{"status":"ok"}{}`, 200, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != "GET" {
+					t.Errorf("method=%s", r.Method)
+				}
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+			err := run([]string{"--config", filepath.Join(t.TempDir(), "missing.json"), "health", "--url", server.URL})
+			if (err == nil) != tc.valid {
+				t.Fatalf("valid=%v err=%v", tc.valid, err)
+			}
+		})
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	server.Close()
+	if err := run([]string{"health", "--url", server.URL}); err == nil {
+		t.Fatal("unreachable HTTP service accepted")
+	}
+	for _, args := range [][]string{{"health", "--url", "file:///tmp/health"}, {"health", "extra"}, {"serve", "--listen", ""}, {"serve", "--unknown"}} {
+		if err := run(args); err == nil {
+			t.Fatalf("invalid args accepted: %v", args)
+		}
+	}
+}
+
 func TestSendTestDoesNotAcceptUnconfirmedResponse(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"code":19001}`))
@@ -81,7 +120,11 @@ func TestSendTestDoesNotAcceptUnconfirmedResponse(t *testing.T) {
 
 func TestHealthAndPreviewDoNotRequireConfigOrDatabase(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "missing.json")
-	if err := run([]string{"--config", missing, "health"}); err != nil {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer server.Close()
+	if err := run([]string{"--config", missing, "health", "--url", server.URL}); err != nil {
 		t.Fatal(err)
 	}
 	if err := run([]string{"--config", missing, "preview", "../../testdata/preview.json"}); err != nil {

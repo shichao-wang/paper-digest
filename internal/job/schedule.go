@@ -3,6 +3,7 @@ package job
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"time"
 )
 
@@ -13,6 +14,9 @@ func (r *Runner) Serve(ctx context.Context, logger *slog.Logger) error {
 	var day, checkedSend string
 	var nextAttempt time.Time
 	running := make(chan struct{}, 1)
+	var work sync.WaitGroup
+	// Deliver 取消后仍可能写入发送结果；等待任务结束后，调用方才能关闭 Store。
+	defer work.Wait()
 	for {
 		now := r.Now().In(beijing())
 		date := BeijingDate(now)
@@ -24,7 +28,9 @@ func (r *Runner) Serve(ctx context.Context, logger *slog.Logger) error {
 			select {
 			case running <- struct{}{}:
 				nextAttempt = now.Add(2 * time.Minute)
+				work.Add(1)
 				go func() {
+					defer work.Done()
 					defer func() { <-running }()
 					deadline := time.Date(now.Year(), now.Month(), now.Day(), 9, 0, 0, 0, beijing())
 					workCtx, cancel := context.WithDeadline(ctx, deadline)
@@ -46,7 +52,9 @@ func (r *Runner) Serve(ctx context.Context, logger *slog.Logger) error {
 				checkedSend = ""
 			} else if now.Hour() == 9 && now.Minute() == 0 && current.Status == "ready" {
 				// 发送在后台运行，以免阻塞调度；发送意图会先写入 SQLite。
+				work.Add(1)
 				go func() {
+					defer work.Done()
 					if err := r.Deliver(ctx, date); err != nil {
 						logger.Error("日报发送未确认，请人工核对", "date", date, "error", err)
 						return
