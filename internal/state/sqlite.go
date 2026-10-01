@@ -147,8 +147,12 @@ CREATE INDEX IF NOT EXISTS jobs_pending
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("initialize sqlite schema: %w", err)
 	}
+	return nil
+}
 
-	// 进程可能在记录发送意图后、记录结果前退出；重启后将结果标记为未知，禁止自动重发。
+// RecoverInterruptedSends 仅在启用的 worker 启动时调用一次，读取操作不调用。
+func (s *Store) RecoverInterruptedSends(ctx context.Context) error {
+	// 进程可能在记录发送意图后、记录结果前退出；重启 worker 后禁止自动重发。
 	if _, err := s.db.ExecContext(ctx, `UPDATE jobs SET status = ? WHERE status = ?`, statusUnknown, statusSending); err != nil {
 		return fmt.Errorf("recover interrupted sends: %w", err)
 	}

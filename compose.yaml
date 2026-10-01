@@ -3,6 +3,9 @@ services:
     build: .
     restart: unless-stopped
     init: true
+    command: ["serve", "--listen", ":8080", "--web-dir", "/app/web/dist"]
+    ports:
+      - "127.0.0.1:8080:8080"
     volumes:
       - digest-data:/data
       - ./config/config.json:/app/config/config.json:ro
@@ -11,6 +14,6 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-    # 无公网端口；未来若加 cloudflared，须单独配置 Access。
+    # 仅本机端口；未来若加 cloudflared，须单独配置 Access。
 volumes:
   digest-data:

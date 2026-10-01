@@ -4,11 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
+	"io"
+	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -18,6 +24,7 @@ import (
 	"github.com/shichao-wang/paper-digest/internal/job"
 	"github.com/shichao-wang/paper-digest/internal/papers"
 	"github.com/shichao-wang/paper-digest/internal/state"
+	"github.com/shichao-wang/paper-digest/internal/web"
 )
 
 func main() {
@@ -80,7 +87,16 @@ func run(args []string) error {
 		return nil
 	}
 	if args[0] == "health" {
-		return nil
+		flags := flag.NewFlagSet("health", flag.ContinueOnError)
+		flags.SetOutput(io.Discard)
+		endpoint := flags.String("url", "http://127.0.0.1:8080/api/health", "health endpoint")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if flags.NArg() != 0 {
+			return errors.New("用法: paper-digest health [--url <地址>]")
+		}
+		return checkHealth(context.Background(), *endpoint, &http.Client{Timeout: 5 * time.Second})
 	}
 	if args[0] != "status" && args[0] != "backup" && args[0] != "serve" {
 		return fmt.Errorf("未知命令 %q", args[0])
@@ -88,27 +104,31 @@ func run(args []string) error {
 	if args[0] == "backup" && len(args) != 2 {
 		return errors.New("用法: paper-digest backup <未存在的目标文件>")
 	}
+	options := serveOptions{Listen: "127.0.0.1:8080", WebDir: "web/dist"}
+	if args[0] == "serve" {
+		flags := flag.NewFlagSet("serve", flag.ContinueOnError)
+		flags.SetOutput(io.Discard)
+		flags.StringVar(&options.Listen, "listen", options.Listen, "HTTP listen address")
+		flags.StringVar(&options.WebDir, "web-dir", options.WebDir, "static web directory")
+		if err := flags.Parse(args[1:]); err != nil {
+			return err
+		}
+		if flags.NArg() != 0 || options.Listen == "" || options.WebDir == "" {
+			return errors.New("用法: paper-digest serve [--listen <地址>] [--web-dir <目录>]")
+		}
+	}
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return err
 	}
-	if args[0] == "serve" && !cfg.Delivery.Enabled {
-		slog.Info("真实运行未启用；容器仅供状态检查与离线预览")
+	if args[0] == "serve" {
 		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		defer stop()
-		<-ctx.Done()
-		return nil
+		return serve(ctx, cfg, options, serveDependencies{})
 	}
 	path, err := cfg.DatabasePath()
 	if err != nil {
 		return err
-	}
-	var webhook string
-	if args[0] == "serve" {
-		webhook, err = cfg.ValidateDelivery(job.Topic)
-		if err != nil {
-			return err
-		}
 	}
 	store, err := state.Open(path)
 	if err != nil {
@@ -129,29 +149,197 @@ func run(args []string) error {
 		return json.NewEncoder(os.Stdout).Encode(current)
 	case "backup":
 		return store.Backup(ctx, args[1])
-	case "serve":
-		model := cfg.Anthropic.Model
-		if model == "" {
-			model = "claude-opus-5"
-		}
-		runner := &job.Runner{
-			Store: store,
-			Fetch: func(ctx context.Context) ([]papers.Paper, error) {
-				fetchCtx, cancel := context.WithTimeout(ctx, 40*time.Second)
-				defer cancel()
-				return papers.Fetch(fetchCtx, &http.Client{Timeout: 40 * time.Second}, "", 100)
-			},
-			Analyzer:     digest.ClaudeAnalyzer{Model: model, APIKey: cfg.Anthropic.APIKey, BaseURL: cfg.Anthropic.BaseURL},
-			Sender:       delivery.Feishu{WebhookURL: webhook},
-			LookbackDays: cfg.Arxiv.LookbackDays,
-			Now:          time.Now,
-		}
-		wait, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
-		defer stop()
-		if err := runner.Serve(wait, slog.Default()); err != nil && !errors.Is(err, context.Canceled) {
+	}
+	return nil
+}
+
+type serveOptions struct {
+	Listen string
+	WebDir string
+}
+
+type worker interface {
+	Serve(context.Context, *slog.Logger) error
+}
+
+type serveDependencies struct {
+	StaticFS  fs.FS
+	Listen    func(string, string) (net.Listener, error)
+	NewWorker func(config.Config, *state.Store, string) (worker, error)
+}
+
+func defaultWorker(cfg config.Config, store *state.Store, webhook string) (worker, error) {
+	model := cfg.Anthropic.Model
+	if model == "" {
+		model = "claude-opus-5"
+	}
+	return &job.Runner{
+		Store: store,
+		Fetch: func(ctx context.Context) ([]papers.Paper, error) {
+			fetchCtx, cancel := context.WithTimeout(ctx, 40*time.Second)
+			defer cancel()
+			return papers.Fetch(fetchCtx, &http.Client{Timeout: 40 * time.Second}, "", 100)
+		},
+		Analyzer: digest.ClaudeAnalyzer{Model: model, APIKey: cfg.Anthropic.APIKey, BaseURL: cfg.Anthropic.BaseURL},
+		Sender:   delivery.Feishu{WebhookURL: webhook}, LookbackDays: cfg.Arxiv.LookbackDays, Now: time.Now,
+	}, nil
+}
+
+func serve(parent context.Context, cfg config.Config, options serveOptions, deps serveDependencies) error {
+	if err := parent.Err(); err != nil {
+		return err
+	}
+	path, err := cfg.DatabasePath()
+	if err != nil {
+		return err
+	}
+	var webhook string
+	if cfg.Delivery.Enabled {
+		webhook, err = cfg.ValidateDelivery(job.Topic)
+		if err != nil {
 			return err
 		}
-		return nil
+	}
+	store, err := state.Open(path)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	staticFS := deps.StaticFS
+	if staticFS == nil {
+		staticFS = os.DirFS(options.WebDir)
+	}
+	handler, err := web.New(store, staticFS)
+	if err != nil {
+		return err
+	}
+	var runner worker
+	if cfg.Delivery.Enabled {
+		factory := deps.NewWorker
+		if factory == nil {
+			factory = defaultWorker
+		}
+		runner, err = factory(cfg, store, webhook)
+		if err != nil {
+			return err
+		}
+		if runner == nil {
+			return errors.New("worker initialization returned nil")
+		}
+	}
+	listen := deps.Listen
+	if listen == nil {
+		listen = net.Listen
+	}
+	listener, err := listen("tcp", options.Listen)
+	if err != nil {
+		return fmt.Errorf("listen HTTP: %w", err)
+	}
+	defer listener.Close()
+	// 启动校验与端口绑定成功后，才恢复状态和启动 worker。
+	if runner != nil {
+		if err := store.RecoverInterruptedSends(parent); err != nil {
+			return err
+		}
+	}
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+	var handlers sync.WaitGroup
+	var handlerMu sync.Mutex
+	var drained bool
+	server := &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			handlerMu.Lock()
+			if drained {
+				handlerMu.Unlock()
+				http.Error(w, "service unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			handlers.Add(1)
+			handlerMu.Unlock()
+			defer handlers.Done()
+			handler.ServeHTTP(w, r)
+		}),
+		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 15 * time.Second,
+		IdleTimeout: 60 * time.Second, BaseContext: func(net.Listener) context.Context { return ctx },
+	}
+	httpDone := make(chan error, 1)
+	go func() { httpDone <- server.Serve(listener) }()
+	var workerDone chan error
+	if runner != nil {
+		workerDone = make(chan error, 1)
+		go func() { workerDone <- runner.Serve(ctx, slog.Default()) }()
+	}
+	var result error
+	var httpStopped, workerStopped bool
+	select {
+	case <-parent.Done():
+	case result = <-httpDone:
+		httpStopped = true
+		if errors.Is(result, http.ErrServerClosed) {
+			result = nil
+		}
+	case result = <-workerDone:
+		workerStopped = true
+		if parent.Err() != nil && errors.Is(result, parent.Err()) {
+			result = nil
+		} else if result == nil {
+			result = errors.New("worker stopped unexpectedly")
+		}
+	}
+	cancel()
+	shutdownCtx, stop := context.WithTimeout(context.Background(), 10*time.Second)
+	defer stop()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		// 关闭连接取消未结束的请求；仍须等 handler 返回再关闭 Store。
+		_ = server.Close()
+		result = errors.Join(result, fmt.Errorf("shutdown HTTP: %w", err))
+	}
+	if !httpStopped {
+		if err := <-httpDone; err != nil && !errors.Is(err, http.ErrServerClosed) {
+			result = errors.Join(result, err)
+		}
+	}
+	handlerMu.Lock()
+	drained = true
+	handlerMu.Unlock()
+	handlers.Wait()
+	if workerDone != nil && !workerStopped {
+		if err := <-workerDone; err != nil && !errors.Is(err, context.Canceled) {
+			result = errors.Join(result, err)
+		}
+	}
+	return result
+}
+
+func checkHealth(ctx context.Context, endpoint string, client *http.Client) error {
+	parsed, err := url.Parse(endpoint)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" || parsed.User != nil {
+		return errors.New("health URL must be a valid HTTP or HTTPS address")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return errors.New("HTTP health check failed")
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("HTTP health check returned status %d", response.StatusCode)
+	}
+	var body struct {
+		Status string `json:"status"`
+	}
+	decoder := json.NewDecoder(io.LimitReader(response.Body, 4096))
+	if err := decoder.Decode(&body); err != nil || body.Status != "ok" {
+		return errors.New("invalid HTTP health response")
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return errors.New("invalid HTTP health response")
 	}
 	return nil
 }

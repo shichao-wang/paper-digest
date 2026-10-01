@@ -5,3 +5,6 @@ config/config.json
 *.db*
 data
 backups
+web/node_modules
+web/dist
+web/*.tsbuildinfo

@@ -1,3 +1,10 @@
+FROM node:24-alpine AS frontend
+WORKDIR /src/web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+COPY web/ ./
+RUN npm run build
+
 FROM golang:1.27-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -10,6 +17,7 @@ RUN apk add --no-cache ca-certificates tzdata && addgroup -S app && adduser -S -
 USER app
 WORKDIR /app
 COPY --from=build /paper-digest /usr/local/bin/paper-digest
+COPY --from=frontend /src/web/dist /app/web/dist
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s CMD ["/usr/local/bin/paper-digest", "health"]
 ENTRYPOINT ["/usr/local/bin/paper-digest"]
-CMD ["serve"]
+CMD ["serve", "--listen", ":8080", "--web-dir", "/app/web/dist"]
