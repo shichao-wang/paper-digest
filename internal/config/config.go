@@ -110,10 +110,15 @@ func ValidateWebhookURL(webhook string) error {
 	return nil
 }
 
-// ValidateDelivery 允许先启动服务，再从页面设置 Webhook。
-func (c Config) ValidateDelivery() error {
+// ValidateDelivery 校验真实运行所需的密钥与主题身份，Webhook 允许稍后从页面设置。
+func (c Config) ValidateDelivery(topicID string) error {
 	if strings.TrimSpace(c.Anthropic.APIKey) == "" {
 		return errors.New("启用真实运行需要 anthropic.api_key")
 	}
-	return nil
+	for _, topic := range c.Topics {
+		if topic.ID == topicID {
+			return nil
+		}
+	}
+	return errors.New("未知主题；请检查主题配置")
 }

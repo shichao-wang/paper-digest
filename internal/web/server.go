@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"path"
@@ -256,7 +257,35 @@ func decodeWebhook(body io.Reader) (string, error) {
 	return *value, nil
 }
 
+func localSettingsHost(authority string) bool {
+	host := authority
+	if strings.HasPrefix(authority, "[") && strings.HasSuffix(authority, "]") {
+		host = strings.TrimSuffix(strings.TrimPrefix(authority, "["), "]")
+	} else if strings.Contains(authority, ":") {
+		var port string
+		var err error
+		host, port, err = net.SplitHostPort(authority)
+		if err != nil {
+			return false
+		}
+		number, err := strconv.ParseUint(port, 10, 16)
+		if err != nil || number == 0 {
+			return false
+		}
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 func sameOrigin(r *http.Request) bool {
+	// Host 必须独立限定为本机，不能只相信 Origin 与 Host 的相互一致。
+	// 不做 DNS 解析，防止攻击者域名重绑定到回环地址后修改设置。
+	if !localSettingsHost(r.Host) {
+		return false
+	}
 	if strings.EqualFold(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")), "cross-site") {
 		return false
 	}

@@ -77,7 +77,7 @@ func TestWebhookSettingsPersistWithoutExposingURL(t *testing.T) {
 	}
 	check(request(handler, "GET", "/api/settings/webhook", ""), false)
 	put := func(body string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest("PUT", "/api/settings/webhook", strings.NewReader(body))
+		req := httptest.NewRequest("PUT", "http://localhost/api/settings/webhook", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json; charset=utf-8")
 		req.Header.Set("Origin", "http://"+req.Host)
 		w := httptest.NewRecorder()
@@ -102,7 +102,7 @@ func TestWebhookSettingsPersistWithoutExposingURL(t *testing.T) {
 	check(request(handler, "GET", "/api/settings/webhook", ""), false)
 	store.Close()
 	for _, method := range []string{"GET", "PUT"} {
-		req := httptest.NewRequest(method, "/api/settings/webhook", strings.NewReader(`{"webhookURL":"`+server.URL+`/secret"}`))
+		req := httptest.NewRequest(method, "http://localhost/api/settings/webhook", strings.NewReader(`{"webhookURL":"`+server.URL+`/secret"}`))
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
@@ -129,11 +129,11 @@ func TestWebhookPutStrictValidationAndSameOrigin(t *testing.T) {
 		{"text content type", valid, "text/plain", "", "", 415},
 		{"malformed content type", valid, "application/json;bad", "", "", 415},
 		{"cross origin", valid, "application/json", "https://other.invalid", "", 403},
-		{"different port", valid, "application/json", "http://example.com:8080", "", 403},
+		{"different port", valid, "application/json", "http://localhost:8080", "", 403},
 		{"null origin", valid, "application/json", "null", "", 403},
-		{"origin path", valid, "application/json", "http://example.com/path", "", 403},
-		{"origin credentials", valid, "application/json", "http://user:secret@example.com", "", 403},
-		{"fetch cross-site", valid, "application/json", "http://example.com", "cross-site", 403},
+		{"origin path", valid, "application/json", "http://localhost/path", "", 403},
+		{"origin credentials", valid, "application/json", "http://user:secret@localhost", "", 403},
+		{"fetch cross-site", valid, "application/json", "http://localhost", "cross-site", 403},
 		{"missing field", `{}`, "application/json", "", "", 400},
 		{"null object", `null`, "application/json", "", "", 400},
 		{"array", `[]`, "application/json", "", "", 400},
@@ -149,11 +149,11 @@ func TestWebhookPutStrictValidationAndSameOrigin(t *testing.T) {
 		{"userinfo", `{"webhookURL":"https://user:secret@example.invalid"}`, "application/json", "", "", 400},
 		{"fragment", `{"webhookURL":"` + initial + `#secret"}`, "application/json", "", "", 400},
 		{"invalid URL", `{"webhookURL":"https://example.invalid/%secret"}`, "application/json", "", "", 400},
-		{"same origin", valid, "application/json", "http://example.com", "same-origin", 200},
+		{"same origin", valid, "application/json", "http://localhost", "same-origin", 200},
 		{"absent origin", valid, "application/json", "", "", 200},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest("PUT", "/api/settings/webhook", strings.NewReader(tc.body))
+			req := httptest.NewRequest("PUT", "http://localhost/api/settings/webhook", strings.NewReader(tc.body))
 			req.Header.Set("Content-Type", tc.contentType)
 			if tc.origin != "" {
 				req.Header.Set("Origin", tc.origin)
@@ -169,8 +169,8 @@ func TestWebhookPutStrictValidationAndSameOrigin(t *testing.T) {
 			}
 		})
 	}
-	for _, origins := range [][]string{{""}, {"http://example.com", "http://example.com"}, {"http://example.com#"}} {
-		req := httptest.NewRequest("PUT", "/api/settings/webhook", strings.NewReader(valid))
+	for _, origins := range [][]string{{""}, {"http://localhost", "http://localhost"}, {"http://localhost#"}} {
+		req := httptest.NewRequest("PUT", "http://localhost/api/settings/webhook", strings.NewReader(valid))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header["Origin"] = origins
 		w := httptest.NewRecorder()
@@ -183,6 +183,49 @@ func TestWebhookPutStrictValidationAndSameOrigin(t *testing.T) {
 		w := request(handler, method, "/api/settings/webhook", "")
 		if w.Code != 405 || w.Header().Get("Allow") != "GET, PUT" {
 			t.Fatalf("method=%s status=%d allow=%s", method, w.Code, w.Header().Get("Allow"))
+		}
+	}
+}
+
+func TestWebhookSettingsRejectReboundHost(t *testing.T) {
+	store, handler := testHandler(t)
+	ctx := context.Background()
+	const initial = "https://example.invalid/original"
+	if err := store.SetWebhook(ctx, job.Topic, initial); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		host string
+		want int
+	}{
+		{"localhost", 200}, {"localhost:8080", 200}, {"LOCALHOST:18081", 200},
+		{"127.0.0.1:8080", 200}, {"127.0.0.2:8080", 200}, {"[::1]:8080", 200}, {"[::1]", 200},
+		{"attacker.invalid:8080", 403}, {"localhost.attacker.invalid:8080", 403},
+		{"localhost.:8080", 403}, {"192.168.1.10:8080", 403}, {"0.0.0.0:8080", 403},
+		{"localhost:bad", 403}, {"localhost:65536", 403}, {"localhost:0", 403},
+	} {
+		for _, withOrigin := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/origin=%t", tc.host, withOrigin), func(t *testing.T) {
+				req := httptest.NewRequest("PUT", "/api/settings/webhook", strings.NewReader(`{"webhookURL":""}`))
+				req.Host = tc.host
+				req.Header.Set("Content-Type", "application/json")
+				req.Header.Set("Sec-Fetch-Site", "same-origin")
+				if withOrigin {
+					req.Header.Set("Origin", "http://"+tc.host)
+				}
+				if err := store.SetWebhook(ctx, job.Topic, initial); err != nil {
+					t.Fatal(err)
+				}
+				w := httptest.NewRecorder()
+				handler.ServeHTTP(w, req)
+				if w.Code != tc.want {
+					t.Fatalf("status=%d want=%d", w.Code, tc.want)
+				}
+				got, err := store.Webhook(ctx, job.Topic)
+				if err != nil || (tc.want == 403 && got != initial) || (tc.want == 200 && got != "") {
+					t.Fatal("Host 校验后的设置与预期不符")
+				}
+			})
 		}
 	}
 }

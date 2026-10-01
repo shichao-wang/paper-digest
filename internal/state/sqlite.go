@@ -43,12 +43,29 @@ type Job struct {
 }
 
 type Store struct {
-	db *sql.DB
+	db   *sql.DB
+	path string // 内存数据库为空；文件路径与 SQLite 使用的实际路径一致。
 }
 
 func Open(path string) (*Store, error) {
 	dsn, err := sqliteDSN(path)
 	if err != nil {
+		return nil, err
+	}
+	filePath, err := sqliteFilePath(dsn)
+	if err != nil {
+		return nil, err
+	}
+	if filePath != "" {
+		// SQLite 默认新建 0644；先创建 0600，避免打开到 chmod 之间的泄露窗口。
+		u, _ := url.Parse(dsn)
+		mode := u.Query().Get("mode")
+		if err := protectSQLiteFile(filePath, mode != "ro" && mode != "rw"); err != nil {
+			return nil, err
+		}
+	}
+	store := &Store{path: filePath}
+	if err := store.protectFiles(); err != nil {
 		return nil, err
 	}
 	db, err := sql.Open("sqlite", dsn)
@@ -58,8 +75,12 @@ func Open(path string) (*Store, error) {
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 
-	store := &Store{db: db}
+	store.db = db
 	if err := store.initialize(context.Background()); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := store.protectFiles(); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -95,6 +116,93 @@ func sqliteDSN(path string) (string, error) {
 	}
 	u.RawQuery = query.Encode()
 	return u.String(), nil
+}
+
+// sqliteFilePath 保留已有 file: URI 支持；内存数据库不对应磁盘文件。
+func sqliteFilePath(dsn string) (string, error) {
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return "", fmt.Errorf("parse sqlite path: %w", err)
+	}
+	path := u.Path
+	if u.Opaque != "" {
+		path, err = url.PathUnescape(u.Opaque)
+		if err != nil {
+			return "", fmt.Errorf("parse sqlite path: %w", err)
+		}
+	}
+	if path == ":memory:" || u.Query().Get("mode") == "memory" {
+		return "", nil
+	}
+	if path == "" || (u.Host != "" && u.Host != "localhost") {
+		return "", errors.New("state: unsupported sqlite file path")
+	}
+	absolute, err := filepath.Abs(filepath.FromSlash(path))
+	if err != nil {
+		return "", fmt.Errorf("resolve sqlite path: %w", err)
+	}
+	// SQLite 会解析数据库符号链接，侧文件需使用相同的实际路径。
+	resolved, err := filepath.EvalSymlinks(absolute)
+	if err == nil {
+		return resolved, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("resolve sqlite path: %w", err)
+	}
+	return absolute, nil
+}
+
+// protectSQLiteFile 不截断既有文件；新文件在创建瞬间即禁止其他用户读取。
+func protectSQLiteFile(path string, create bool) error {
+	var file *os.File
+	var err error
+	if create {
+		file, err = os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+		if errors.Is(err, os.ErrExist) {
+			return protectSQLiteFile(path, false)
+		}
+	} else {
+		info, statErr := os.Stat(path)
+		if statErr != nil {
+			return fmt.Errorf("check sqlite file: %w", statErr)
+		}
+		if !info.Mode().IsRegular() {
+			return errors.New("state: sqlite file must be a regular file")
+		}
+		file, err = os.Open(path)
+	}
+	if err != nil {
+		return fmt.Errorf("open private sqlite file: %w", err)
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("check sqlite file: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return errors.New("state: sqlite file must be a regular file")
+	}
+	if err := file.Chmod(0o600); err != nil {
+		return fmt.Errorf("protect sqlite file permissions: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) protectFiles() error {
+	if s.path == "" {
+		return nil
+	}
+	if err := protectSQLiteFile(s.path, false); err != nil {
+		return err
+	}
+	// SQLite 的 Unix VFS 新建 WAL、SHM 和 rollback journal 时沿用主 DB 权限。
+	// 既有侧文件则不会自动收紧，必须在任何密钥写入前处理。
+	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
+		if err := protectSQLiteFile(s.path+suffix, false); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Store) initialize(ctx context.Context) error {
@@ -166,6 +274,9 @@ func (s *Store) RecoverInterruptedSends(ctx context.Context) error {
 
 // MigrateWebhooks 仅导入旧 JSON 配置中合法的非空地址；已有空值行代表主动清除。
 func (s *Store) MigrateWebhooks(ctx context.Context, topics []config.Topic) error {
+	if err := s.protectFiles(); err != nil {
+		return err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return errors.New("state: migrate webhooks failed")
@@ -208,6 +319,9 @@ func (s *Store) SetWebhook(ctx context.Context, topic, webhook string) error {
 			return err
 		}
 	}
+	if err := s.protectFiles(); err != nil {
+		return err
+	}
 	if _, err := s.db.ExecContext(ctx, `
 INSERT INTO topic_webhooks(topic, webhook_url) VALUES(?, ?)
 ON CONFLICT(topic) DO UPDATE SET webhook_url = excluded.webhook_url`, topic, webhook); err != nil {
@@ -220,19 +334,48 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-func (s *Store) Backup(ctx context.Context, dest string) error {
+func (s *Store) Backup(ctx context.Context, dest string) (err error) {
 	if strings.TrimSpace(dest) == "" {
 		return errors.New("state: backup destination is empty")
 	}
-	if _, err := os.Lstat(dest); err == nil {
+	dest, err = filepath.Abs(dest)
+	if err != nil {
+		return fmt.Errorf("resolve backup destination: %w", err)
+	}
+	if err := s.protectFiles(); err != nil {
+		return err
+	}
+	// VACUUM INTO 接受既有空文件；独占预创建既保留拒绝覆盖语义，
+	// 又确保备份中的 webhook 从第一个字节起就只有 owner 可读。
+	file, err := os.OpenFile(dest, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	if errors.Is(err, os.ErrExist) {
 		return fmt.Errorf("state: backup destination already exists: %s", dest)
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("check backup destination: %w", err)
+	}
+	if err != nil {
+		return fmt.Errorf("create private backup destination: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			if removeErr := os.Remove(dest); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				err = errors.Join(err, fmt.Errorf("remove failed sqlite backup: %w", removeErr))
+			}
+		}
+	}()
+	if err = file.Chmod(0o600); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("protect backup permissions: %w", err)
+	}
+	if err = file.Close(); err != nil {
+		return fmt.Errorf("close backup destination: %w", err)
+	}
+	backup := &Store{path: dest}
+	if err := backup.protectFiles(); err != nil {
+		return err
 	}
 	if _, err := s.db.ExecContext(ctx, `VACUUM INTO ?`, dest); err != nil {
 		return fmt.Errorf("backup sqlite database: %w", err)
 	}
-	return nil
+	return backup.protectFiles()
 }
 
 func (s *Store) ClaimDay(ctx context.Context, topic, date string) (Job, error) {

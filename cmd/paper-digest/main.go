@@ -217,7 +217,7 @@ func serve(parent context.Context, cfg config.Config, options serveOptions, deps
 		return err
 	}
 	if cfg.Delivery.Enabled {
-		if err := cfg.ValidateDelivery(); err != nil {
+		if err := cfg.ValidateDelivery(job.Topic); err != nil {
 			return err
 		}
 	}

@@ -11,7 +11,11 @@ import (
 func (r *Runner) Serve(ctx context.Context, logger *slog.Logger) error {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
-	var day, checkedSend string
+	return r.serve(ctx, logger, ticker.C)
+}
+
+func (r *Runner) serve(ctx context.Context, logger *slog.Logger, ticks <-chan time.Time) error {
+	var day, checkedSend, checkedMissed string
 	var nextAttempt time.Time
 	running := make(chan struct{}, 1)
 	var work sync.WaitGroup
@@ -21,7 +25,7 @@ func (r *Runner) Serve(ctx context.Context, logger *slog.Logger) error {
 		now := r.Now().In(beijing())
 		date := BeijingDate(now)
 		if day != date {
-			day, checkedSend = date, ""
+			day, checkedSend, checkedMissed = date, "", ""
 			nextAttempt = time.Time{}
 		}
 		if now.Hour() >= 8 && now.Hour() < 9 && !now.Before(nextAttempt) {
@@ -42,15 +46,21 @@ func (r *Runner) Serve(ctx context.Context, logger *slog.Logger) error {
 			default:
 			}
 		}
-		if now.Hour() >= 9 && checkedSend != date {
-			checkedSend = date
+		inSendWindow := now.Hour() == 9 && now.Minute() == 0
+		// 窗口内只尝试一次发送；窗口结束后仍须单独收口未发出的 ready 任务。
+		if now.Hour() >= 9 && ((inSendWindow && checkedSend != date) || (!inSendWindow && checkedMissed != date)) {
+			if inSendWindow {
+				checkedSend = date
+			} else {
+				checkedMissed = date
+			}
 			if _, err := r.Store.ClaimDay(ctx, Topic, date); err != nil {
 				logger.Error("检查日报任务失败", "date", date, "error", err)
-				checkedSend = ""
+				checkedSend, checkedMissed = "", ""
 			} else if current, err := r.Store.GetJob(ctx, Topic, date); err != nil {
 				logger.Error("读取日报状态失败", "date", date, "error", err)
-				checkedSend = ""
-			} else if now.Hour() == 9 && now.Minute() == 0 && current.Status == "ready" {
+				checkedSend, checkedMissed = "", ""
+			} else if inSendWindow && current.Status == "ready" {
 				// 发送在后台运行，以免阻塞调度；发送意图会先写入 SQLite。
 				work.Add(1)
 				go func() {
@@ -64,7 +74,7 @@ func (r *Runner) Serve(ctx context.Context, logger *slog.Logger) error {
 			} else if current.Status != "sent" && current.Status != "unknown" && current.Status != "sending" {
 				if err := r.Store.MarkMissed(ctx, Topic, date); err != nil {
 					logger.Error("记录漏发失败", "date", date, "error", err)
-					checkedSend = ""
+					checkedSend, checkedMissed = "", ""
 				} else {
 					logger.Error("日报未在北京时间 09:00 就绪或容器错过发送窗口", "date", date)
 				}
@@ -73,7 +83,7 @@ func (r *Runner) Serve(ctx context.Context, logger *slog.Logger) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-ticker.C:
+		case <-ticks:
 		}
 	}
 }

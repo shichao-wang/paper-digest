@@ -123,6 +123,47 @@ func TestServeSettingsMigratedBeforeStartupAndAllowMissingWebhook(t *testing.T) 
 	}
 }
 
+func TestEnabledServeRejectsUnconfiguredWorkerTopicBeforeSideEffects(t *testing.T) {
+	for _, topic := range []string{"another", "recommendation-advertising-seach"} {
+		t.Run(topic, func(t *testing.T) {
+			path := sendingDatabase(t)
+			cfg := serveConfig(path, true)
+			cfg.Topics = []config.Topic{{ID: topic, WebhookURL: "https://example.invalid/private-secret"}}
+			factoryCalled, listenCalled := false, false
+			err := serve(context.Background(), cfg, serveOptions{}, serveDependencies{
+				StaticFS: fixtureFS(),
+				NewWorker: func(config.Config, *state.Store) (worker, error) {
+					factoryCalled = true
+					return workerFunc(func(context.Context, *slog.Logger) error {
+						t.Error("未登记主题不得启动付费 worker")
+						return nil
+					}), nil
+				},
+				Listen: func(string, string) (net.Listener, error) {
+					listenCalled = true
+					return nil, errors.New("不应绑定端口")
+				},
+			})
+			if err == nil || !strings.Contains(err.Error(), "未知主题") || strings.Contains(err.Error(), "private-secret") || factoryCalled || listenCalled {
+				t.Fatalf("未在创建 worker 前拒绝主题: factory=%v listen=%v err=%v", factoryCalled, listenCalled, err)
+			}
+			store, err := state.Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			saved, err := store.GetJob(context.Background(), job.Topic, "2026-09-29")
+			if err != nil || saved.Status != "sending" {
+				t.Fatalf("校验失败不得恢复发送状态: %+v %v", saved, err)
+			}
+			webhook, err := store.Webhook(context.Background(), topic)
+			if err != nil || webhook != "" {
+				t.Fatal("校验失败不得迁移地址")
+			}
+		})
+	}
+}
+
 func TestDisabledServeUsesHTTPWithoutWorkerOrRecovery(t *testing.T) {
 	path := sendingDatabase(t)
 	cfg := serveConfig(path, false)

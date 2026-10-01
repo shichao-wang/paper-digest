@@ -73,9 +73,9 @@ go run ./cmd/paper-digest --config data/web-preview/config.json serve
 
 `config/config.example.json` 是可提交的示例，`config/config.json` 是 **Git 和 Docker 构建都忽略的实际配置**；后者通过 Compose 只读挂载到容器，不在镜像中。请在启动 Compose **之前**创建该文件，且仅在实际配置中填写模型密钥。当前 `recommendation-advertising-search` 是 Recommendation／Advertising／Search 联合主题。
 
-飞书群机器人 Webhook 在页面右上角的「设置」中配置。粘贴完整 HTTPS 地址并保存后，地址保存在 SQLite 数据卷中，后续推送每次读取当前配置，无需重启容器。已保存的地址不回显；替换时填写新地址即可。「清除配置」经过确认后暂停推送，重新配置后恢复。保存、替换和清除均不会发送群消息，也不会补发历史日报。页面没有登录功能，设置入口应只供本机使用；对外开放时需在入口配置访问控制。
+飞书群机器人 Webhook 在页面右上角的「设置」中配置。粘贴完整 HTTPS 地址并保存后，地址保存在 SQLite 数据卷中，后续推送每次读取当前配置，无需重启容器。已保存的地址不回显；替换时填写新地址即可。「清除配置」经过确认后暂停推送，重新配置后恢复。保存、替换和清除均不会发送群消息，也不会补发历史日报。页面没有登录功能，设置写入仅接受 `localhost` 或回环 IP 的 Host，请从本机地址打开设置。代理需保留原始 Host；域名入口不能用于修改 Webhook，对外开放阅读页面时仍需配置访问控制。
 
-已有 JSON 中的 `topics[].webhook_url` 仍兼容：`serve` 和已确认的 `send-test` 首次打开数据库时，将合法的旧地址迁入数据库，已有页面配置不会被覆盖，已清除的地址也不会复活。迁移后可从实际 JSON 中移除 `webhook_url`。数据库与备份包含 Webhook 密钥，应按凭据保管。
+已有 JSON 中的 `topics[].webhook_url` 仍兼容：`serve` 和已确认的 `send-test` 首次打开数据库时，将合法的旧地址迁入数据库，已有页面配置不会被覆盖，已清除的地址也不会复活。迁移后可从实际 JSON 中移除 `webhook_url`。数据库与备份包含 Webhook 密钥，应按凭据保管。服务打开数据库及保存 Webhook 前会将数据库、已有 WAL/SHM 收紧为 `0600`，新数据库与备份也以 `0600` 创建；无法设置权限时会报错停止操作。
 
 配置文件还包含 `database.path`（保持 `/data/digest.db`，对应现有数据卷）、`delivery.enabled`、`anthropic.api_key`、`anthropic.model`、可选的 `anthropic.base_url` 和 `arxiv.lookback_days`（1～30 天）。程序不会从旧环境变量补齐这些字段；SDK 也只使用配置中的 API key 和服务地址。直接运行 CLI 时默认读取工作目录下的 `config/config.json`，如需其他路径可在子命令前指定 `--config <文件>`。`health` 和 `preview` 不读取该文件。
 
@@ -99,7 +99,7 @@ docker compose exec -T paper-digest paper-digest send-test --topic recommendatio
 
 此命令会产生**一条真实群消息**，但不会启动日报任务；不用在命令行粘贴 Webhook。只有飞书明确返回成功码才报告请求已被接受，仍须在目标群核对。试发未确认（超时、断网或异常响应）时，先到群里核对，**不要盲目再次执行**；该人工试发不改变日报状态。
 
-仅当 `config/config.json` 中的 `anthropic.api_key` 与页面中的 Webhook 均就绪，且已核对试发对象与内容，才将 `delivery.enabled` 改为 `true` 并重新创建容器。开启自动运行需要模型密钥；缺少 Webhook 时仍可生成日报，但不执行推送，错过发送窗口不会自动补发。真实调用模型会产生费用。Webhook URL 包含密钥，实际配置、数据库与备份不能提交或公开。
+仅当 `config/config.json` 中的 `anthropic.api_key` 与页面中的 Webhook 均就绪，且已核对试发对象与内容，才将 `delivery.enabled` 改为 `true` 并重新创建容器。开启自动运行需要模型密钥，且 `topics` 必须登记 `recommendation-advertising-search`；缺少 Webhook 时仍可生成日报，但不执行推送，窗口结束后记为 `missed`，不会自动补发。真实调用模型会产生费用。Webhook URL 包含密钥，实际配置、数据库与备份不能提交或公开。
 
 ## 运行语义
 
