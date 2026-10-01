@@ -2,6 +2,7 @@ package digest
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -10,7 +11,6 @@ import (
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
-	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/shichao-wang/paper-digest/internal/papers"
 )
 
@@ -28,14 +28,18 @@ func TestClaudeAnalyzerUsesConfiguredModelAndTraceablePrompt(t *testing.T) {
 	}
 	called := false
 	analyzer := ClaudeAnalyzer{
-		Model:  "claude-test-model",
-		APIKey: "file-key",
-		request: func(_ context.Context, apiKey, model, prompt string) (string, error) {
+		Model:   "group/deepseek-v4-1-flash",
+		APIKey:  "file-key",
+		BaseURL: "http://127.0.0.1:3425",
+		request: func(_ context.Context, apiKey, baseURL, model, prompt string) (string, error) {
 			if apiKey != "file-key" {
 				t.Errorf("未使用配置文件中的密钥")
 			}
+			if baseURL != "http://127.0.0.1:3425" {
+				t.Errorf("未使用配置中的网关地址")
+			}
 			called = true
-			if model != "claude-test-model" {
+			if model != "group/deepseek-v4-1-flash" {
 				t.Errorf("model = %q, want configured model", model)
 			}
 			for _, part := range []string{"arxiv:2609.12345v2", paper.Title, paper.Abstract, paper.URL, "只能依据"} {
@@ -54,14 +58,14 @@ func TestClaudeAnalyzerUsesConfiguredModelAndTraceablePrompt(t *testing.T) {
 	if !called {
 		t.Fatal("injected request was not called")
 	}
-	if got.Text != "摘要正文" || got.Model != "claude-test-model" || got.PromptVersion != promptVersion {
+	if got.Text != "摘要正文" || got.Model != "group/deepseek-v4-1-flash" || got.PromptVersion != promptVersion {
 		t.Errorf("Analyze() = %#v", got)
 	}
 }
 
 func TestClaudeAnalyzerDefaultsModelAndRejectsEmptyResult(t *testing.T) {
 	analyzer := ClaudeAnalyzer{
-		request: func(_ context.Context, _, model, _ string) (string, error) {
+		request: func(_ context.Context, _, _, model, _ string) (string, error) {
 			if model != defaultModel {
 				t.Errorf("model = %q, want default %q", model, defaultModel)
 			}
@@ -75,6 +79,7 @@ func TestClaudeAnalyzerDefaultsModelAndRejectsEmptyResult(t *testing.T) {
 
 func TestClaudeClientUsesFileKeyInsteadOfEnvironment(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "environment-key")
+	t.Setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:1")
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
@@ -85,7 +90,7 @@ func TestClaudeClientUsesFileKeyInsteadOfEnvironment(t *testing.T) {
 		_, _ = w.Write([]byte(`{"type":"error","error":{"type":"invalid_request_error","message":"test"}}`))
 	}))
 	defer server.Close()
-	client := newClaudeClient("file-key", option.WithBaseURL(server.URL))
+	client := newClaudeClient("file-key", server.URL)
 	_, _ = client.Messages.New(context.Background(), anthropic.MessageNewParams{
 		Model: "claude-test-model", MaxTokens: 1,
 		Messages: []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock("test"))},
@@ -95,10 +100,33 @@ func TestClaudeClientUsesFileKeyInsteadOfEnvironment(t *testing.T) {
 	}
 }
 
+func TestRequestClaudeRoutesToConfiguredGateway(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/messages" || r.Header.Get("X-Api-Key") != "file-key" {
+			t.Error("模型请求路径或认证不符合预期")
+		}
+		var body struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Model != "group/deepseek-v4-1-flash" {
+			t.Error("模型请求未使用指定模型")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"msg_test","type":"message","role":"assistant","model":"group/deepseek-v4-1-flash","content":[{"type":"text","text":"测试摘要"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
+	}))
+	defer server.Close()
+	text, err := requestClaude(context.Background(), "file-key", server.URL, "group/deepseek-v4-1-flash", "测试")
+	if err != nil || text != "测试摘要" || calls != 1 {
+		t.Fatalf("网关调用失败: text=%q, err=%v, calls=%d", text, err, calls)
+	}
+}
+
 func TestClaudeAnalyzerWrapsRequestError(t *testing.T) {
 	wantErr := errors.New("temporary API failure")
 	analyzer := ClaudeAnalyzer{
-		request: func(context.Context, string, string, string) (string, error) {
+		request: func(context.Context, string, string, string, string) (string, error) {
 			return "", wantErr
 		},
 	}

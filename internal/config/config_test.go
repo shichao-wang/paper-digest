@@ -18,6 +18,22 @@ func loadFixture(t *testing.T, text string) (Config, error) {
 	return Load(path)
 }
 
+func TestModelGatewayConfig(t *testing.T) {
+	cfg, err := loadFixture(t, `{"anthropic":{"base_url":" http://host.docker.internal:3425 ","model":"group/deepseek-v4-1-flash"},"arxiv":{"lookback_days":7},"topics":[{"id":"recommendation-advertising-search"}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Anthropic.BaseURL != "http://host.docker.internal:3425" || cfg.Anthropic.Model != "group/deepseek-v4-1-flash" {
+		t.Fatal("未保留模型网关配置")
+	}
+	for _, value := range []string{"ftp://example.com/secret", "http:///secret", "https://user:secret@example.com", "https://example.com?key=secret", "https://example.com#secret"} {
+		_, err := loadFixture(t, `{"anthropic":{"base_url":"`+value+`"},"arxiv":{"lookback_days":7},"topics":[{"id":"recommendation-advertising-search"}]}`)
+		if err == nil || strings.Contains(err.Error(), "secret") {
+			t.Fatalf("应拒绝无效网关地址且不泄漏凭据: %v", err)
+		}
+	}
+}
+
 func TestWebhookSelectsDistinctRobots(t *testing.T) {
 	cfg, err := loadFixture(t, `{"arxiv":{"lookback_days":7},"topics":[{"id":"recommendation-advertising-search","webhook_url":"https://example.com/ras"},{"id":"new-topic","webhook_url":"https://example.com/new"}]}`)
 	if err != nil {

@@ -27,7 +27,8 @@ type Analyzer interface {
 type ClaudeAnalyzer struct {
 	Model   string
 	APIKey  string
-	request func(context.Context, string, string, string) (string, error)
+	BaseURL string
+	request func(context.Context, string, string, string, string) (string, error)
 }
 
 func (a ClaudeAnalyzer) Analyze(ctx context.Context, paper papers.Paper) (Summary, error) {
@@ -40,7 +41,7 @@ func (a ClaudeAnalyzer) Analyze(ctx context.Context, paper papers.Paper) (Summar
 	if request == nil {
 		request = requestClaude
 	}
-	text, err := request(ctx, a.APIKey, model, buildPrompt(paper))
+	text, err := request(ctx, a.APIKey, a.BaseURL, model, buildPrompt(paper))
 	if err != nil {
 		return Summary{}, fmt.Errorf("analyze arXiv paper %s: %w", paper.ID, err)
 	}
@@ -51,12 +52,16 @@ func (a ClaudeAnalyzer) Analyze(ctx context.Context, paper papers.Paper) (Summar
 	return Summary{Text: text, Model: model, PromptVersion: promptVersion}, nil
 }
 
-func newClaudeClient(apiKey string, opts ...option.RequestOption) anthropic.Client {
-	return anthropic.NewClient(append([]option.RequestOption{option.WithoutEnvironmentDefaults(), option.WithAPIKey(apiKey)}, opts...)...)
+func newClaudeClient(apiKey, baseURL string, opts ...option.RequestOption) anthropic.Client {
+	options := []option.RequestOption{option.WithoutEnvironmentDefaults(), option.WithAPIKey(apiKey)}
+	if baseURL = strings.TrimSpace(baseURL); baseURL != "" {
+		options = append(options, option.WithBaseURL(baseURL))
+	}
+	return anthropic.NewClient(append(options, opts...)...)
 }
 
-func requestClaude(ctx context.Context, apiKey, model, prompt string) (string, error) {
-	client := newClaudeClient(apiKey)
+func requestClaude(ctx context.Context, apiKey, baseURL, model, prompt string) (string, error) {
+	client := newClaudeClient(apiKey, baseURL)
 	response, err := client.Messages.New(ctx, anthropic.MessageNewParams{
 		Model:     model,
 		MaxTokens: 1200,
