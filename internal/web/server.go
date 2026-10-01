@@ -23,6 +23,13 @@ import (
 
 type Options struct {
 	DeliveryEnabled bool
+	Topics          []config.Topic
+}
+
+type topicRecord struct {
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	DeliveryEnabled bool   `json:"deliveryEnabled"`
 }
 
 // New 使用共享 Store 与静态资源目录；调用方管理生命周期，创建 handler 不打开数据库。
@@ -38,18 +45,54 @@ func New(store *state.Store, staticFS fs.FS, options ...Options) (http.Handler, 
 	if err != nil {
 		return nil, fmt.Errorf("web: read static index.html: %w", err)
 	}
-	s := &server{store: store, staticFS: staticFS, files: http.FileServer(http.FS(staticFS))}
+	s := &server{store: store, staticFS: staticFS, files: http.FileServer(http.FS(staticFS)), topics: make([]topicRecord, 0)}
+	// 旧调用方省略 Options 时保留 RAS；显式传入空目录则不提供默认主题。
+	settings := Options{Topics: []config.Topic{{ID: job.Topic}}}
 	if len(options) > 0 {
-		s.deliveryEnabled = options[0].DeliveryEnabled
+		settings = options[0]
+	}
+	for _, topic := range settings.Topics {
+		name := topic.ID
+		if topic.ID == job.Topic {
+			name = "推荐 / 广告 / 搜索"
+		}
+		s.topics = append(s.topics, topicRecord{ID: topic.ID, Name: name, DeliveryEnabled: settings.DeliveryEnabled && topic.ID == job.Topic})
+		if s.defaultTopic == "" || topic.ID == job.Topic {
+			s.defaultTopic = topic.ID
+		}
 	}
 	return http.HandlerFunc(s.serveHTTP), nil
 }
 
 type server struct {
-	store           *state.Store
-	staticFS        fs.FS
-	files           http.Handler
-	deliveryEnabled bool
+	store        *state.Store
+	staticFS     fs.FS
+	files        http.Handler
+	topics       []topicRecord
+	defaultTopic string
+}
+
+func (s *server) selectTopic(w http.ResponseWriter, r *http.Request) (topicRecord, bool) {
+	values, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid query parameters")
+		return topicRecord{}, false
+	}
+	id := s.defaultTopic
+	if requested, exists := values["topic"]; exists {
+		if len(requested) != 1 || strings.TrimSpace(requested[0]) == "" {
+			writeError(w, http.StatusBadRequest, "invalid topic parameter")
+			return topicRecord{}, false
+		}
+		id = requested[0]
+	}
+	for _, topic := range s.topics {
+		if topic.ID == id {
+			return topic, true
+		}
+	}
+	writeError(w, http.StatusNotFound, "topic not found")
+	return topicRecord{}, false
 }
 
 func (s *server) serveHTTP(w http.ResponseWriter, r *http.Request) {
@@ -145,7 +188,20 @@ func (s *server) serveIndex(w http.ResponseWriter, r *http.Request) {
 func (s *server) api(w http.ResponseWriter, r *http.Request) {
 	var value any
 	var err error
+	var topic topicRecord
+	digestDetail := strings.HasPrefix(r.URL.Path, "/api/digests/") && !strings.Contains(strings.TrimPrefix(r.URL.Path, "/api/digests/"), "/")
+	if r.URL.Path == "/api/papers" || r.URL.Path == "/api/papers/detail" || r.URL.Path == "/api/digests" || digestDetail {
+		var ok bool
+		topic, ok = s.selectTopic(w, r)
+		if !ok {
+			return
+		}
+	}
 	switch r.URL.Path {
+	case "/api/topics":
+		value = struct {
+			Items []topicRecord `json:"items"`
+		}{s.topics}
 	case "/api/health":
 		if err = s.store.Health(r.Context()); err == nil {
 			value = struct {
@@ -156,19 +212,19 @@ func (s *server) api(w http.ResponseWriter, r *http.Request) {
 		var page state.PageQuery
 		page, err = pagination(r.URL.Query())
 		if err == nil {
-			value, err = s.store.BrowsePapers(r.Context(), job.Topic, state.PaperQuery{PageQuery: page, Q: r.URL.Query().Get("q"), Date: r.URL.Query().Get("date"), Summary: r.URL.Query().Get("summary")})
+			value, err = s.store.BrowsePapers(r.Context(), topic.ID, state.PaperQuery{PageQuery: page, Q: r.URL.Query().Get("q"), Date: r.URL.Query().Get("date"), Summary: r.URL.Query().Get("summary")})
 		}
 	case "/api/papers/detail":
-		value, err = s.store.PaperDetail(r.Context(), job.Topic, r.URL.Query().Get("id"), r.URL.Query().Get("date"))
+		value, err = s.store.PaperDetail(r.Context(), topic.ID, r.URL.Query().Get("id"), r.URL.Query().Get("date"))
 	case "/api/digests":
 		var page state.PageQuery
 		page, err = pagination(r.URL.Query())
 		if err == nil {
-			value, err = s.store.BrowseDigests(r.Context(), job.Topic, page)
+			value, err = s.store.BrowseDigests(r.Context(), topic.ID, page)
 		}
 	default:
-		if strings.HasPrefix(r.URL.Path, "/api/digests/") && !strings.Contains(strings.TrimPrefix(r.URL.Path, "/api/digests/"), "/") {
-			value, err = s.store.DigestDetail(r.Context(), job.Topic, strings.TrimPrefix(r.URL.Path, "/api/digests/"))
+		if digestDetail {
+			value, err = s.store.DigestDetail(r.Context(), topic.ID, strings.TrimPrefix(r.URL.Path, "/api/digests/"))
 		} else {
 			writeError(w, http.StatusNotFound, "not found")
 			return
@@ -191,6 +247,10 @@ func (s *server) api(w http.ResponseWriter, r *http.Request) {
 const maxWebhookBody = 16 << 10
 
 func (s *server) webhookSettings(w http.ResponseWriter, r *http.Request) {
+	topic, ok := s.selectTopic(w, r)
+	if !ok {
+		return
+	}
 	var webhook string
 	var err error
 	if r.Method == http.MethodPut {
@@ -214,9 +274,9 @@ func (s *server) webhookSettings(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid webhook settings")
 			return
 		}
-		err = s.store.SetWebhook(r.Context(), job.Topic, webhook)
+		err = s.store.SetWebhook(r.Context(), topic.ID, webhook)
 	} else {
-		webhook, err = s.store.Webhook(r.Context(), job.Topic)
+		webhook, err = s.store.Webhook(r.Context(), topic.ID)
 	}
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "service unavailable")
@@ -226,7 +286,7 @@ func (s *server) webhookSettings(w http.ResponseWriter, r *http.Request) {
 		Topic           string `json:"topic"`
 		Configured      bool   `json:"configured"`
 		DeliveryEnabled bool   `json:"deliveryEnabled"`
-	}{job.Topic, webhook != "", s.deliveryEnabled})
+	}{topic.ID, webhook != "", topic.DeliveryEnabled})
 }
 
 // 精确字段名、单个对象、无重复字段，避免宽松解码把误填字段当成清除。

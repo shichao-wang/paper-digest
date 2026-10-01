@@ -230,7 +230,7 @@ func serve(parent context.Context, cfg config.Config, options serveOptions, deps
 	if staticFS == nil {
 		staticFS = os.DirFS(options.WebDir)
 	}
-	handler, err := web.New(store, staticFS, web.Options{DeliveryEnabled: cfg.Delivery.Enabled})
+	handler, err := web.New(store, staticFS, web.Options{DeliveryEnabled: cfg.Delivery.Enabled, Topics: cfg.Topics})
 	if err != nil {
 		return err
 	}

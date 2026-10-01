@@ -1,3 +1,4 @@
+export interface Topic { id: string; name: string; deliveryEnabled: boolean }
 export interface Summary { text: string; model: string; promptVersion: string }
 export interface Paper {
   id: string; version: string; title: string; authors: string[]

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -118,6 +119,83 @@ func TestServeSettingsMigratedBeforeStartupAndAllowMissingWebhook(t *testing.T) 
 				}
 			case <-time.After(time.Second):
 				t.Fatal("服务未停止")
+			}
+		})
+	}
+}
+
+func TestServePassesConfiguredTopicsAndReportsOnlyRASWorker(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprint(enabled), func(t *testing.T) {
+			cfg := serveConfig(filepath.Join(t.TempDir(), "topics.db"), enabled)
+			cfg.Topics = append([]config.Topic{{ID: "another", WebhookURL: "https://example.invalid/another-secret"}}, cfg.Topics...)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			address := make(chan string, 1)
+			result := make(chan error, 1)
+			go func() {
+				result <- serve(ctx, cfg, serveOptions{Listen: "127.0.0.1:0"}, serveDependencies{
+					StaticFS: fixtureFS(),
+					NewWorker: func(config.Config, *state.Store) (worker, error) {
+						if !enabled {
+							return nil, errors.New("disabled delivery constructed worker")
+						}
+						return workerFunc(func(ctx context.Context, _ *slog.Logger) error { <-ctx.Done(); return ctx.Err() }), nil
+					},
+					Listen: func(network, addr string) (net.Listener, error) {
+						listener, err := net.Listen(network, addr)
+						if err == nil {
+							address <- listener.Addr().String()
+						}
+						return listener, err
+					},
+				})
+			}()
+			var addr string
+			select {
+			case addr = <-address:
+			case err := <-result:
+				t.Fatalf("serve startup: %v", err)
+			case <-time.After(time.Second):
+				t.Fatal("HTTP not initialized")
+			}
+			client := &http.Client{Timeout: time.Second}
+			response, err := client.Get("http://" + addr + "/api/topics")
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, err := io.ReadAll(response.Body)
+			response.Body.Close()
+			var directory struct {
+				Items []struct {
+					ID              string `json:"id"`
+					Name            string `json:"name"`
+					DeliveryEnabled bool   `json:"deliveryEnabled"`
+				} `json:"items"`
+			}
+			if err != nil || json.Unmarshal(body, &directory) != nil || response.StatusCode != 200 || len(directory.Items) != 2 || strings.Contains(string(body), "https://") || strings.Contains(string(body), "secret") {
+				t.Fatalf("topics=%d %s err=%v", response.StatusCode, body, err)
+			}
+			if directory.Items[0].ID != "another" || directory.Items[0].Name != "another" || directory.Items[0].DeliveryEnabled || directory.Items[1].ID != job.Topic || directory.Items[1].Name != "推荐 / 广告 / 搜索" || directory.Items[1].DeliveryEnabled != enabled {
+				t.Fatalf("wrong topics or automatic delivery status: %s", body)
+			}
+			response, err = client.Get("http://" + addr + "/api/settings/webhook?topic=another")
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, err = io.ReadAll(response.Body)
+			response.Body.Close()
+			if err != nil || response.StatusCode != 200 || string(body) != "{\"topic\":\"another\",\"configured\":true,\"deliveryEnabled\":false}\n" {
+				t.Fatalf("another settings=%d %s err=%v", response.StatusCode, body, err)
+			}
+			cancel()
+			select {
+			case err := <-result:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("serve did not stop")
 			}
 		})
 	}

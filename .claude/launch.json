@@ -12,6 +12,12 @@
       "runtimeExecutable": "go",
       "runtimeArgs": ["run", "./cmd/paper-digest", "--config", "data/web-preview/config.json", "serve", "--listen", "127.0.0.1:18081", "--web-dir", "web/dist"],
       "port": 18081
+    },
+    {
+      "name": "topic-settings-preview",
+      "runtimeExecutable": "go",
+      "runtimeArgs": ["run", "./cmd/paper-digest", "--config", "data/topic-preview/config.json", "serve", "--listen", "127.0.0.1:18082", "--web-dir", "web/dist"],
+      "port": 18082
     }
   ]
 }
