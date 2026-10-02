@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS recommendations (topic TEXT NOT NULL,paper_id TEXT NO
 ''')
 topic = 'recommendation-advertising-search'
 entries = [
-    ('2610.00001', 'A Unified Retrieval Framework for Recommendation and Search', ['Lin Chen', 'Alex Morgan', 'Wei Zhang'], '检索框架（演示数据）', '• 研究问题：推荐与搜索常使用独立的检索模型，难以共享用户意图。\n\n• 方法：提出统一的双塔检索框架，对查询和用户历史采用共同的表示空间。\n\n• 结果：公开摘要报告了离线召回改进，但未给出全部实验细节。\n\n• 局限：以上内容为页面演示数据，不代表真实论文结论。'),
+    ('2610.00001', 'A Unified Retrieval Framework for Recommendation and Search', ['Lin Chen', 'Alex Morgan', 'Wei Zhang'], '检索框架（演示数据）', '• 研究问题：推荐与搜索常使用独立的检索模型，难以共享用户意图。\n\n• 方法：提出统一的双塔检索框架，对查询和用户历史采用共同的表示空间，评分为 $s(u,i)=\\mathbf{u}^{T}\\mathbf{v}_i$。\n\n$$p(i \\mid u)=\\frac{e^{s(u,i)}}{\\sum_j e^{s(u,j)}}$$\n\n• 结果：公开摘要报告了离线召回改进，但未给出全部实验细节。\n\n• 局限：以上内容为页面演示数据，不代表真实论文结论。'),
     ('2610.00002', 'Learning Long-Term User Preferences from Sparse Implicit Feedback', ['Maya Patel', 'Jun Liu'], '长期偏好（演示数据）', None),
     ('2610.00003', 'Counterfactual Evaluation of Advertising Policies under Distribution Shift', ['Rui Wang', 'Sofia Garcia', 'Noah Kim'], '广告评估（演示数据）', '• 使用反事实方法评估广告策略。\n\n• 关注分布变化下的估计稳定性。\n\n• 本条目仅用于界面演示。'),
 ]

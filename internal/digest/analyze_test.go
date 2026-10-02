@@ -123,6 +123,43 @@ func TestRequestClaudeRoutesToConfiguredGateway(t *testing.T) {
 	}
 }
 
+func TestRequestClaudeRejectsIncompleteResponses(t *testing.T) {
+	for _, reason := range []string{"max_tokens", "refusal", "tool_use", "pause_turn", "stop_sequence", "", "unexpected"} {
+		t.Run(reason, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"id": "msg_test", "type": "message", "role": "assistant", "model": "test",
+					"content":     []map[string]string{{"type": "text", "text": `主要结果：误差 \(\epsilon`}},
+					"stop_reason": reason, "usage": map[string]int{"input_tokens": 1, "output_tokens": 1200},
+				})
+			}))
+			defer server.Close()
+			text, err := requestClaude(context.Background(), "test-key", server.URL, "test", "测试")
+			if err == nil || text != "" || !strings.Contains(err.Error(), "stop_reason=") {
+				t.Fatalf("不完整响应不应成功: text=%q, err=%v", text, err)
+			}
+		})
+	}
+}
+
+func TestClaudeAnalyzerRejectsUnclosedMath(t *testing.T) {
+	for _, text := range []string{`主要结果：误差 \(\epsilon`, `块级 \[x^2`, `多余闭合 \)`} {
+		analyzer := ClaudeAnalyzer{request: func(context.Context, string, string, string, string) (string, error) {
+			return text, nil
+		}}
+		if _, err := analyzer.Analyze(context.Background(), papers.Paper{ID: "arxiv:2609.40351"}); err == nil || !strings.Contains(err.Error(), "unclosed math") {
+			t.Fatalf("未闭合公式不应保存: text=%q, err=%v", text, err)
+		}
+	}
+	analyzer := ClaudeAnalyzer{request: func(context.Context, string, string, string, string) (string, error) {
+		return `近似误差 \(\epsilon\)，深度 \[\poly(n)\]。`, nil
+	}}
+	if _, err := analyzer.Analyze(context.Background(), papers.Paper{}); err != nil {
+		t.Fatalf("完整公式应通过: %v", err)
+	}
+}
+
 func TestClaudeAnalyzerWrapsRequestError(t *testing.T) {
 	wantErr := errors.New("temporary API failure")
 	analyzer := ClaudeAnalyzer{

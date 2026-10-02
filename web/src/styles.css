@@ -115,6 +115,10 @@ h1, h2, h3, p { margin-top: 0; }
 .section-heading h3, .abstract-section h3, .digest-message h3 { font-size: 15px; font-weight: 650; margin-bottom: 0; }
 .section-heading span { font-size: 11px; color: var(--muted); }
 .summary-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 2; }
+.summary-text > .math-text, .abstract-text > .math-text { display: block; min-width: 0; }
+.math-text .katex { white-space: normal; overflow-wrap: normal; text-align: initial; }
+.math-text .katex-display { display: block; max-width: 100%; overflow-x: auto; overflow-y: hidden; padding: 4px 0; white-space: normal; }
+.math-text .katex-display > .katex { width: max-content; min-width: 100%; white-space: nowrap; text-align: center; }
 .summary-missing { font-size: 13px; line-height: 1.8; color: var(--muted); margin-bottom: 0; }
 .provenance { font-size: 11px; color: var(--muted); margin-top: 18px; }
 .provenance summary { cursor: pointer; }

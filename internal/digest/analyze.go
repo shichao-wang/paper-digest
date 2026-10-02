@@ -49,6 +49,11 @@ func (a ClaudeAnalyzer) Analyze(ctx context.Context, paper papers.Paper) (Summar
 	if text == "" {
 		return Summary{}, fmt.Errorf("analyze arXiv paper %s: Claude returned an empty summary", paper.ID)
 	}
+	for _, pair := range [][2]string{{`\(`, `\)`}, {`\[`, `\]`}} {
+		if strings.Count(text, pair[0]) != strings.Count(text, pair[1]) {
+			return Summary{}, fmt.Errorf("analyze arXiv paper %s: unclosed math delimiter", paper.ID)
+		}
+	}
 	return Summary{Text: text, Model: model, PromptVersion: promptVersion}, nil
 }
 
@@ -64,13 +69,18 @@ func requestClaude(ctx context.Context, apiKey, baseURL, model, prompt string) (
 	client := newClaudeClient(apiKey, baseURL)
 	response, err := client.Messages.New(ctx, anthropic.MessageNewParams{
 		Model:     model,
-		MaxTokens: 1200,
+		MaxTokens: 4096,
 		Messages: []anthropic.MessageParam{
 			anthropic.NewUserMessage(anthropic.NewTextBlock(prompt)),
 		},
 	})
 	if err != nil {
 		return "", err
+	}
+
+	// 截断或非正常结束的文本不能作为完整摘要保存，留给任务恢复时重试。
+	if response.StopReason != anthropic.StopReasonEndTurn {
+		return "", fmt.Errorf("summary did not complete: stop_reason=%q, output_tokens=%d", response.StopReason, response.Usage.OutputTokens)
 	}
 
 	var text strings.Builder
