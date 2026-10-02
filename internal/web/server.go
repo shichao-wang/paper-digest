@@ -54,7 +54,10 @@ func NewWithDocuments(store *state.Store, staticFS fs.FS, repository *document.R
 	if err != nil {
 		return nil, fmt.Errorf("web: read static index.html: %w", err)
 	}
-	s := &server{store: store, staticFS: staticFS, files: http.FileServer(http.FS(staticFS)), documents: repository, topics: make([]topicRecord, 0)}
+	s := &server{store: store, staticFS: staticFS, files: http.FileServer(http.FS(staticFS)), topics: make([]topicRecord, 0)}
+	if repository != nil {
+		s.documents = repository
+	}
 	// 旧调用方省略 Options 时保留 RAS；显式传入空目录则不提供默认主题。
 	settings := Options{Topics: []config.Topic{{ID: job.Topic}}}
 	if len(options) > 0 {
@@ -73,11 +76,17 @@ func NewWithDocuments(store *state.Store, staticFS fs.FS, repository *document.R
 	return http.HandlerFunc(s.serveHTTP), nil
 }
 
+const evidenceTimeout = 2 * time.Minute
+
+type evidenceRepository interface {
+	BlockText(context.Context, library.Document, string) (library.Block, error)
+}
+
 type server struct {
 	store        *state.Store
 	staticFS     fs.FS
 	files        http.Handler
-	documents    *document.Repository
+	documents    evidenceRepository
 	topics       []topicRecord
 	defaultTopic string
 }
@@ -118,8 +127,20 @@ func (s *server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		// 证据读取会重新校验完整文档，单独给出文件核查预算。
+		timeout := 5 * time.Second
+		if r.URL.Path == "/api/library/evidence" {
+			timeout = evidenceTimeout
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), timeout)
 		defer cancel()
+		if r.URL.Path == "/api/library/evidence" {
+			deadline, _ := ctx.Deadline()
+			if err := http.NewResponseController(w).SetWriteDeadline(deadline); err != nil && !errors.Is(err, http.ErrNotSupported) {
+				writeError(w, http.StatusServiceUnavailable, "service unavailable")
+				return
+			}
+		}
 		r = r.WithContext(ctx)
 		if settings {
 			s.webhookSettings(w, r)

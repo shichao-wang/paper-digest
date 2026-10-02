@@ -273,7 +273,7 @@ func (r *Repository) download(ctx context.Context, i library.Identity, max int64
 		return nil, "", err
 	}
 	req.Header.Set("Accept", "application/pdf")
-	resp, err := arxivclient.Client(&client).Do(req)
+	resp, err := arxivclient.Do(&client, req)
 	if err != nil {
 		return nil, "", err
 	}

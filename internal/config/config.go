@@ -34,12 +34,16 @@ type Library struct {
 	TaskTimeoutSeconds int      `json:"task_timeout_seconds"`
 }
 
-func (l *Library) defaults(databasePath string) {
+func (l *Library) defaults(databasePath string) error {
 	if len(l.Categories) == 0 {
 		l.Categories = arxivclient.AnnouncementCategories()
 	}
 	if l.DocumentDir == "" {
-		l.DocumentDir = filepath.Join(filepath.Dir(databasePath), "library")
+		var err error
+		l.DocumentDir, err = defaultDocumentDir(databasePath)
+		if err != nil {
+			return err
+		}
 	}
 	if l.Concurrency == 0 {
 		l.Concurrency = 1
@@ -56,7 +60,39 @@ func (l *Library) defaults(databasePath string) {
 	if l.TaskTimeoutSeconds == 0 {
 		l.TaskTimeoutSeconds = 1800
 	}
+	return nil
 }
+
+// defaultDocumentDir 使用 SQLite file: URI 的文件路径；内存库没有相邻目录，
+// 与普通相对路径一样默认将文档保存在当前目录下的 library。
+func defaultDocumentDir(databasePath string) (string, error) {
+	if databasePath == ":memory:" {
+		return "library", nil
+	}
+	if strings.HasPrefix(databasePath, "file:") {
+		invalidURI := errors.New("无法从 database.path 推导 library.document_dir；请配置有效的 SQLite 文件 URI 或显式文档目录")
+		u, err := url.Parse(databasePath)
+		if err != nil {
+			return "", invalidURI
+		}
+		path := u.Path
+		if u.Opaque != "" {
+			path, err = url.PathUnescape(u.Opaque)
+			if err != nil {
+				return "", invalidURI
+			}
+		}
+		if path == ":memory:" || u.Query().Get("mode") == "memory" {
+			return "library", nil
+		}
+		if path == "" || (u.Host != "" && u.Host != "localhost") {
+			return "", invalidURI
+		}
+		databasePath = filepath.FromSlash(path)
+	}
+	return filepath.Join(filepath.Dir(databasePath), "library"), nil
+}
+
 func (l Library) Validate() error {
 	if l.Concurrency < 1 || l.Concurrency > 8 || l.PollSeconds < 60 || l.MaxRequests < 1 || l.MaxRequests > 1000 || l.MaxTokens < 4096 || l.TaskTimeoutSeconds < 60 || l.TaskTimeoutSeconds > 7200 || strings.TrimSpace(l.DocumentDir) == "" {
 		return errors.New("library 的并发、轮询、预算、超时或文档目录不合法")
@@ -127,7 +163,9 @@ func Load(path string) (Config, error) {
 	if cfg.Arxiv.LookbackDays < 1 || cfg.Arxiv.LookbackDays > 30 {
 		return Config{}, errors.New("arxiv.lookback_days 必须为 1 到 30")
 	}
-	cfg.Library.defaults(cfg.Database.Path)
+	if err := cfg.Library.defaults(cfg.Database.Path); err != nil {
+		return Config{}, err
+	}
 	if err := cfg.Library.Validate(); err != nil {
 		return Config{}, err
 	}

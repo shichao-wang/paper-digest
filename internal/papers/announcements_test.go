@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -240,6 +241,108 @@ func TestPublicRequestPacingAcrossAllArxivAdapters(t *testing.T) {
 			t.Fatalf("metadata cancellation sent request or capture: %v %v %d", err, artifacts, len(starts))
 		}
 	})
+}
+
+func TestVersionMetadataSurvivesQueueLongerThanTransferTimeout(t *testing.T) {
+	root := t.TempDir()
+	synctest.Test(t, func(t *testing.T) {
+		var mu sync.Mutex
+		var starts []time.Time
+		client := &http.Client{Transport: publicTestTransport(func(req *http.Request) (*http.Response, error) {
+			mu.Lock()
+			starts = append(starts, time.Now())
+			mu.Unlock()
+			deadline, ok := req.Context().Deadline()
+			if !ok || time.Until(deadline) != sourceRequestTimeout {
+				t.Errorf("metadata started with budget %s, has deadline %v", time.Until(deadline), ok)
+			}
+			id := req.URL.Query().Get("id_list")
+			entry := `<entry><id>https://arxiv.org/abs/` + id + `</id><title>Verified title</title><published>2026-10-01T12:00:00Z</published><updated>2026-10-01T12:00:00Z</updated><summary>Submission abstract.</summary><author><name>Alice Smith</name></author><category term="cs.IR"/><arxiv:primary_category term="cs.IR"/></entry>`
+			return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(syntheticFeed(entry))), Request: req}, nil
+		})}
+		source := Source{Client: client, ArtifactRoot: root}
+		start := time.Now()
+		var wg sync.WaitGroup
+		for n := 0; n < 13; n++ {
+			wg.Go(func() {
+				identity := library.Identity{Source: "arxiv", PaperID: fmt.Sprintf("2610.%05d", n+1), Version: "v1"}
+				version, artifacts, err := source.FetchVersionMetadata(context.Background(), identity)
+				if err != nil || !version.MetadataVerified || len(artifacts) != 1 {
+					t.Errorf("queued metadata %s: verified=%v artifacts=%d err=%v", identity.PaperID, version.MetadataVerified, len(artifacts), err)
+				}
+			})
+		}
+		wg.Wait()
+		if len(starts) != 13 || time.Since(start) < 36*time.Second {
+			t.Fatalf("metadata queue: requests=%d elapsed=%s", len(starts), time.Since(start))
+		}
+		for n := 1; n < len(starts); n++ {
+			if starts[n].Sub(starts[n-1]) < 3*time.Second {
+				t.Fatal("metadata requests bypassed shared pacing")
+			}
+		}
+		if client.Timeout != 0 {
+			t.Fatal("source modified injected client")
+		}
+	})
+}
+
+type sourceContextBody struct {
+	ctx    context.Context
+	prefix string
+}
+
+func (b *sourceContextBody) Read(p []byte) (int, error) {
+	if b.prefix != "" {
+		n := copy(p, b.prefix)
+		b.prefix = b.prefix[n:]
+		return n, nil
+	}
+	<-b.ctx.Done()
+	return 0, b.ctx.Err()
+}
+func (b *sourceContextBody) Close() error { return nil }
+
+func TestMetadataTransferTimeoutAndPartialCapture(t *testing.T) {
+	for _, phase := range []string{"headers", "body"} {
+		for _, timeout := range []time.Duration{0, time.Second} {
+			t.Run(fmt.Sprintf("%s/client-timeout-%s", phase, timeout), func(t *testing.T) {
+				root := t.TempDir()
+				synctest.Test(t, func(t *testing.T) {
+					client := &http.Client{Timeout: timeout, Transport: publicTestTransport(func(req *http.Request) (*http.Response, error) {
+						if phase == "headers" {
+							<-req.Context().Done()
+							return nil, req.Context().Err()
+						}
+						return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: &sourceContextBody{ctx: req.Context(), prefix: "partial metadata"}, Request: req}, nil
+					})}
+					source := Source{Client: client, APIBase: "http://localhost/api/query", ArtifactRoot: root}
+					start := time.Now()
+					_, artifacts, err := source.FetchVersionMetadata(context.Background(), library.Identity{Source: "arxiv", PaperID: "2610.00001", Version: "v1"})
+					want := timeout
+					if want == 0 {
+						want = sourceRequestTimeout
+					}
+					if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) != want {
+						t.Fatalf("metadata transfer timeout: err=%v elapsed=%s want %s", err, time.Since(start), want)
+					}
+					if phase == "headers" && len(artifacts) != 0 {
+						t.Fatal("headers timeout captured missing body")
+					}
+					if phase == "body" {
+						if len(artifacts) != 1 {
+							t.Fatalf("partial capture missing: %v", artifacts)
+						}
+						checkArtifacts(t, root, artifacts)
+						body, readErr := os.ReadFile(filepath.Join(root, artifacts[0].Path))
+						if readErr != nil || string(body) != "partial metadata" {
+							t.Fatalf("partial body=%q err=%v", body, readErr)
+						}
+					}
+				})
+			})
+		}
+	}
 }
 
 func TestAnnouncementsRejectUnsupportedCategoriesBeforeRequests(t *testing.T) {

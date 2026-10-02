@@ -316,8 +316,6 @@ func (s Source) capture(ctx context.Context, endpoint *url.URL, kind string, bud
 	if *budget <= 0 {
 		return nil, library.Artifact{}, fmt.Errorf("arXiv source resource byte limit exceeded")
 	}
-	ctx, cancel := context.WithTimeout(ctx, sourceRequestTimeout)
-	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
 		return nil, library.Artifact{}, err
@@ -336,7 +334,7 @@ func (s Source) capture(ctx context.Context, endpoint *url.URL, kind string, bud
 	client.CheckRedirect = func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	}
-	resp, err := arxivclient.Client(&client).Do(req)
+	resp, err := arxivclient.Do(&client, req)
 	if err != nil {
 		return nil, library.Artifact{}, fmt.Errorf("fetch arXiv source %s: %w", endpoint, err)
 	}

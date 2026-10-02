@@ -34,11 +34,21 @@ type DeepSeekAnalyzer struct {
 // ClaudeAnalyzer 保留旧调用方的类型名；实际请求统一使用 Chat 协议。
 type ClaudeAnalyzer = DeepSeekAnalyzer
 
-func (a DeepSeekAnalyzer) Analyze(ctx context.Context, paper papers.Paper) (Summary, error) {
-	model := strings.TrimSpace(a.Model)
-	if model == "" {
-		model = defaultModel
+func (a DeepSeekAnalyzer) model() string {
+	if model := strings.TrimSpace(a.Model); model != "" {
+		return model
 	}
+	return defaultModel
+}
+
+// Validate 复用摘要请求的客户端配置校验，不发送 HTTP 请求。
+func (a DeepSeekAnalyzer) Validate() error {
+	_, err := newSummaryClient(a.APIKey, a.BaseURL, a.model())
+	return err
+}
+
+func (a DeepSeekAnalyzer) Analyze(ctx context.Context, paper papers.Paper) (Summary, error) {
+	model := a.model()
 
 	request := a.request
 	if request == nil {
@@ -55,11 +65,15 @@ func (a DeepSeekAnalyzer) Analyze(ctx context.Context, paper papers.Paper) (Summ
 	return Summary{Text: text, Model: model, PromptVersion: promptVersion}, nil
 }
 
-func requestChat(ctx context.Context, apiKey, baseURL, model, prompt string) (string, error) {
-	client, err := modelchat.NewClient(modelchat.Options{
+func newSummaryClient(apiKey, baseURL, model string) (*modelchat.Client, error) {
+	return modelchat.NewClient(modelchat.Options{
 		APIKey: apiKey, BaseURL: baseURL, Model: model,
 		Timeout: 90 * time.Second, Budget: modelchat.NewBudget(1),
 	})
+}
+
+func requestChat(ctx context.Context, apiKey, baseURL, model, prompt string) (string, error) {
+	client, err := newSummaryClient(apiKey, baseURL, model)
 	if err != nil {
 		return "", err
 	}

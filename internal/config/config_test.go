@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -96,6 +97,54 @@ func TestLibraryDefaultsAndIndependentSwitches(t *testing.T) {
 		if err == nil || strings.Contains(err.Error(), "secret") {
 			t.Fatalf("invalid library accepted/leaked: %s %v", fields, err)
 		}
+	}
+}
+
+func TestLibraryDocumentDirDefaultsFromSQLitePath(t *testing.T) {
+	for _, tc := range []struct {
+		name, path, want string
+	}{
+		{"plain-relative", "data/digest.db", filepath.Join("data", "library")},
+		{"plain-special-characters", "data ?#/digest.db", filepath.Join("data ?#", "library")},
+		{"absolute-uri", "file:/tmp/paper-digest/digest.db?mode=rwc", "/tmp/paper-digest/library"},
+		{"localhost-uri", "file://localhost/tmp/paper-digest/digest.db?cache=shared", "/tmp/paper-digest/library"},
+		{"relative-uri", "file:data/digest.db?mode=rwc&cache=shared", filepath.Join("data", "library")},
+		{"escaped-relative-uri", "file:data%20%3F%23/digest.db?mode=rwc", filepath.Join("data ?#", "library")},
+		{"escaped-absolute-uri", "file:///tmp/paper%20%3F%23/digest.db?mode=rwc", "/tmp/paper ?#/library"},
+		{"escaped-once", "file:data%2520/digest.db", filepath.Join("data%20", "library")},
+		{"query-slash", "file:digest.db?cache=shared&ignored=a/b", "library"},
+		{"memory", ":memory:", "library"},
+		{"memory-uri", "file::memory:?cache=shared", "library"},
+		{"named-memory-uri", "file:data/cache.db?mode=memory&cache=shared", "library"},
+		{"absolute-memory-uri", "file:///tmp/cache.db?mode=memory", "library"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			quoted, _ := json.Marshal(tc.path)
+			cfg, err := loadFixture(t, `{"database":{"path":`+string(quoted)+`},"arxiv":{"lookback_days":7},"topics":[{"id":"recommendation-advertising-search"}]}`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Library.DocumentDir != tc.want {
+				t.Fatalf("document_dir = %q, want %q", cfg.Library.DocumentDir, tc.want)
+			}
+			if cfg.Database.Path != tc.path {
+				t.Fatal("default document_dir changed the database DSN")
+			}
+		})
+	}
+}
+
+func TestLibraryDocumentDirRejectsInvalidSQLiteURIDefaultWithoutEcho(t *testing.T) {
+	for _, path := range []string{"file:data%xx/private-secret.db", "file:/tmp/%xx/private-secret.db", "file://private-secret/tmp/digest.db", "file:?cache=shared&private-secret=1"} {
+		quoted, _ := json.Marshal(path)
+		_, err := loadFixture(t, `{"database":{"path":`+string(quoted)+`},"arxiv":{"lookback_days":7},"topics":[{"id":"recommendation-advertising-search"}]}`)
+		if err == nil || !strings.Contains(err.Error(), "library.document_dir") || strings.Contains(err.Error(), "private-secret") {
+			t.Fatalf("invalid SQLite URI default accepted or echoed: %v", err)
+		}
+	}
+	cfg, err := loadFixture(t, `{"database":{"path":"file:data%20directory/digest.db?mode=rwc"},"library":{"document_dir":"custom/documents"},"arxiv":{"lookback_days":7},"topics":[{"id":"recommendation-advertising-search"}]}`)
+	if err != nil || cfg.Library.DocumentDir != "custom/documents" {
+		t.Fatalf("explicit document_dir was not preserved: %q %v", cfg.Library.DocumentDir, err)
 	}
 }
 

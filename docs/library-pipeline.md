@@ -4,7 +4,7 @@
 
 ## 运行与配置
 
-`library.collect_enabled` 与 `library.process_enabled` 分别控制服务中的周期采集和任务消费，默认关闭，与旧 `delivery.enabled` 独立。处理需要模型密钥，不需要飞书 Webhook。`library.document_dir` 是数据库引用的源响应、PDF、提取文本共同根目录；容器配置为 `/data/library`，与数据库同在持久卷。宿主机使用本地可写目录。
+`library.collect_enabled` 与 `library.process_enabled` 分别控制服务中的周期采集和任务消费，默认关闭，与旧 `delivery.enabled` 独立。处理需要模型密钥，不需要飞书 Webhook。旧日报启用时也会在启动监听前校验 Chat 配置，迁移不兼容时直接失败。`library.document_dir` 是数据库引用的源响应、PDF、提取文本共同根目录；容器配置为 `/data/library`，与数据库同在持久卷。宿主机使用本地可写目录。省略文档目录时默认保存到数据库所在目录下的 `library`；`file:` SQLite URI 先解析实际路径并去除查询参数，内存库默认使用当前目录下的 `library`。
 
 其余配置：`categories` 五分类；`concurrency=1`（1～8）；`poll_seconds=900`（至少60秒）；`max_requests=120`、`max_tokens=500000`、`task_timeout_seconds=1800`（60～7200秒）。预算是每个模型阶段任务的累计上限，包含所有分块、汇总、修复和重启；增加配置不会补回已有任务的消耗。调用前以输入字节和输出上限保守预留，无可靠 usage 的请求保留预留；因此预算可能提前暂停。费用金额不从 token 推算。
 
@@ -50,7 +50,7 @@ paper-digest --config config/config.json reanalyze 2610.00001 v2
 
 来源状态包括 `complete`、`incomplete`，发现未捕获的中间公告时记录 `gap`。空 feed 需要同日官方零计数证据。截断、计数／日期不一致、未知结构、同 ID 多版本歧义和资源边界都不能标为完整。已捕获候选及原响应仍留档；无法确认公告日的观察保持日期为空，不造当天日期。当前来源不能可靠恢复任意历史修订公告。gap 检测按通常公告工作日保守提示，节假日等仍需来源核实。
 
-元信息阶段按精确版本 `id_list` 核对，保留原响应和 hash。对照前版标为 `comparison_reference`，不伪造公告，也不自动作为新候选排队。
+元信息阶段按精确版本 `id_list` 核对，保留原响应和 hash。公共 arXiv 请求共享至少三秒的起始间隔；等待限速不消耗 HTTP 客户端的传输超时，调用方取消与总截止时间仍约束等待和传输。对照前版标为 `comparison_reference`，不伪造公告，也不自动作为新候选排队。
 
 ## 阶段与恢复
 
@@ -58,7 +58,7 @@ paper-digest --config config/config.json reanalyze 2610.00001 v2
 
 任务状态：`queued`、`running`、`retry_wait`、`paused`、`blocked`、`succeeded`。短事务领取任务，唯一 token 和到期租约约束所有检查点／结果写入；网络、提取和模型在事务外。阶段结果、有效指针、下阶段入队和成功状态原子提交。过期领取者不能覆盖新运行；generation 防止迟到旧结果覆盖较新代次。比较任务按所属代次读取不可变分析，模型调用前固定当前版与前版文档，重试复用这些输入，避免新代次更新指针后串用材料。关闭服务先取消工作，再等待 worker 和 HTTP handler 结束才关闭数据库。
 
-SQLite 通过显式增量 migration 升级。首次打开有旧数据的库，迁移前自动 `VACUUM INTO` 创建不覆盖的 `.pre-library-…db` 一致性快照，失败不迁移。旧日报四表、摘要及 `sent/unknown` 保留；真实 vN 仅导入 `legacy_digest` 元信息，旧 hash 不冒充 arXiv 版本，不自动排全文任务。
+SQLite 通过显式增量 migration 升级。首次打开有旧数据的库，迁移前自动 `VACUUM INTO` 独占创建 `<数据库路径>.pre-library-v1.db` 一致性快照，失败不迁移。迁移失败重启时核验已有快照的完整性、旧 schema 与数据后复用，不反复生成完整副本；损坏或不匹配的快照保持原样并阻止迁移，需人工核实后恢复或移走。此前随机名称的备份保留，升级后最多额外创建一个稳定名称快照。旧日报四表、摘要及 `sent/unknown` 保留；真实 vN 仅导入 `legacy_digest` 元信息，旧 hash 不冒充 arXiv 版本，不自动排全文任务。
 
 ## 全文与 Agent
 
@@ -81,7 +81,7 @@ Chat 工具阶段保留完整 assistant、逐调用结果及每块每轮用量�
 - `GET /api/library/status`
 - `GET /api/library/evidence?id=…&version=vN&document=…&block=…`
 
-状态筛选可用 `paused` 或 `analyze:paused`。查询不会启动模型。列表／详情不返回检查点会话或租约 token，正文按需读取。旧日报 API 保持；`paper+paperDate` 深链仍读取当天摘要快照，`view=digests|legacy` 可浏览历史。旧摘要／日报使用 URL 参数 `digestTopic` 保存配置主题 ID，并向旧 API 传递 `topic`；新版本库的 `topic` 仍是论文研究主题标签，互不混用。旧链接中的配置主题参数仍兼容。
+状态筛选可用 `paused` 或 `analyze:paused`。证据展开核对完整持久文档，使用独立的两分钟处理与写入期限，调用方更早的取消／截止时间仍生效；其他 API 保持五秒处理期限。查询不会启动模型。列表／详情不返回检查点会话或租约 token，正文按需读取。旧日报 API 保持；`paper+paperDate` 深链仍读取当天摘要快照，`view=digests|legacy` 可浏览历史。旧摘要／日报使用 URL 参数 `digestTopic` 保存配置主题 ID，并向旧 API 传递 `topic`；新版本库的 `topic` 仍是论文研究主题标签，互不混用。旧链接中的配置主题参数仍兼容。
 
 「日报主题管理」提供已登记主题的 Webhook 设置入口，保存到 SQLite，不影响只读版本库查询。设置 API 保留回环 Host、Origin 和输入校验，响应不返回已存地址；保存／清除不发送群消息。运行配置与旧地址迁移规则见 [README](../README.md#主题与机器人配置)。
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -16,6 +17,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 	"unicode/utf8"
 
@@ -212,6 +214,92 @@ func TestDownloadFailuresDoNotPublish(t *testing.T) {
 		})
 	}
 }
+
+type pdfTestTransport func(*http.Request) (*http.Response, error)
+
+func (f pdfTestTransport) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+type pdfContextBody struct{ ctx context.Context }
+
+func (b *pdfContextBody) Read([]byte) (int, error) { <-b.ctx.Done(); return 0, b.ctx.Err() }
+func (b *pdfContextBody) Close() error             { return nil }
+
+func TestPDFRedirectPacingDoesNotConsumeTransferTimeout(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var starts []time.Time
+		var firstContext context.Context
+		redirectChecks := 0
+		client := &http.Client{Timeout: 2 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			redirectChecks++
+			return nil
+		}, Transport: pdfTestTransport(func(req *http.Request) (*http.Response, error) {
+			starts = append(starts, time.Now())
+			if len(starts) == 2 && !errors.Is(firstContext.Err(), context.Canceled) {
+				t.Fatalf("first body timer still alive: %v", firstContext.Err())
+			}
+			deadline, ok := req.Context().Deadline()
+			if !ok || time.Until(deadline) != 2*time.Second {
+				t.Fatalf("PDF timeout includes queue: %s", time.Until(deadline))
+			}
+			resp := &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("%PDF-complete fixture")), Request: req}
+			if len(starts) == 1 {
+				firstContext = req.Context()
+				resp.StatusCode = http.StatusFound
+				resp.Header.Set("Location", "https://static.arxiv.org/pdf/2501.01234v2.pdf")
+			}
+			return resp, nil
+		})}
+		r := &Repository{Client: client}
+		body, source, err := r.download(context.Background(), fixtureIdentity, defaultMaxBytes)
+		if err != nil || string(body) != "%PDF-complete fixture" || source != fixtureIdentity.PDFURL() || len(starts) != 2 || starts[1].Sub(starts[0]) != 3*time.Second || redirectChecks != 1 {
+			t.Fatalf("PDF redirect: body=%q source=%s starts=%v checks=%d err=%v", body, source, starts, redirectChecks, err)
+		}
+		if client.Timeout != 2*time.Second {
+			t.Fatal("download modified client timeout")
+		}
+	})
+}
+
+func TestPDFTransferBodyTimeoutAndCancellation(t *testing.T) {
+	for _, cause := range []string{"default timeout", "injected timeout", "caller deadline", "caller cancellation"} {
+		t.Run(cause, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				want, elapsed := context.DeadlineExceeded, 2*time.Minute
+				switch cause {
+				case "injected timeout":
+					elapsed = time.Second
+				case "caller deadline":
+					var deadlineCancel context.CancelFunc
+					ctx, deadlineCancel = context.WithTimeout(ctx, time.Second)
+					defer deadlineCancel()
+					elapsed = time.Second
+				case "caller cancellation":
+					want, elapsed = context.Canceled, time.Second
+					go func() { time.Sleep(time.Second); cancel() }()
+				}
+				base := pdfTestTransport(func(req *http.Request) (*http.Response, error) {
+					return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: &pdfContextBody{ctx: req.Context()}, Request: req}, nil
+				})
+				// Preserve the production default client path without any network.
+				oldTransport := http.DefaultTransport
+				http.DefaultTransport = base
+				defer func() { http.DefaultTransport = oldTransport }()
+				r := &Repository{PDFBase: "http://localhost/pdf"}
+				if cause == "injected timeout" {
+					r.Client = &http.Client{Transport: base, Timeout: time.Second}
+				}
+				start := time.Now()
+				_, _, err := r.download(ctx, fixtureIdentity, defaultMaxBytes)
+				if !errors.Is(err, want) || time.Since(start) != elapsed {
+					t.Fatalf("PDF body timeout: err=%v elapsed=%s want %v/%s", err, time.Since(start), want, elapsed)
+				}
+			})
+		})
+	}
+}
+
 func TestDownloadContextAndCommandFailure(t *testing.T) {
 	t.Run("cancel-download", func(t *testing.T) {
 		r := helperRepository(t, fixturePages)

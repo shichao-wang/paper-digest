@@ -18,6 +18,7 @@ import (
 
 	"github.com/shichao-wang/paper-digest/internal/config"
 	"github.com/shichao-wang/paper-digest/internal/job"
+	"github.com/shichao-wang/paper-digest/internal/modelchat"
 	"github.com/shichao-wang/paper-digest/internal/state"
 )
 
@@ -62,6 +63,71 @@ func serveConfig(path string, enabled bool) config.Config {
 
 func fixtureFS() fstest.MapFS {
 	return fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("fixture")}}
+}
+
+func TestDefaultWorkerValidatesChatSettingsWithoutHTTP(t *testing.T) {
+	transport := &demoRejectNetwork{}
+	original := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = original })
+	for _, tc := range []struct {
+		name, key, model, base string
+		valid, migration       bool
+	}{
+		{"legacy-model", "opaque-private-secret", "claude-opus-5", "", false, true},
+		{"legacy-key", "sk-ant-private-secret", "deepseek-flash", "", false, true},
+		{"legacy-key-default-model", "sk-ant-private-secret", "", "", false, true},
+		{"official-legacy-model", "opaque-private-secret", "claude-opus-5", "https://api.deepseek.com/v1", false, true},
+		{"invalid-base", "synthetic-private-secret", "deepseek-flash", "https://user:private-secret@example.invalid", false, false},
+		{"missing-key", "", "deepseek-flash", "", false, false},
+		{"deepseek-default", "synthetic-private-secret", "", "", true, false},
+		{"deepseek-trimmed-default", "synthetic-private-secret", " \n", " \n", true, false},
+		{"deepseek-official", "synthetic-private-secret", "deepseek-flash", "https://api.deepseek.com/anthropic", true, false},
+		{"explicit-gateway", "opaque-private-secret", "group/custom-model", "http://127.0.0.1:3425/v1", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := serveConfig("", true)
+			cfg.Anthropic.APIKey, cfg.Anthropic.Model, cfg.Anthropic.BaseURL = tc.key, tc.model, tc.base
+			worker, err := defaultWorker(cfg, nil)
+			if (err == nil) != tc.valid || (worker != nil) != tc.valid || errors.Is(err, modelchat.ErrMigrationRequired) != tc.migration || transport.calls != 0 {
+				t.Fatalf("startup validation: valid=%v migration=%v err=%v calls=%d", tc.valid, tc.migration, err, transport.calls)
+			}
+			if err != nil && strings.Contains(err.Error(), "private-secret") {
+				t.Fatal("startup validation exposed a credential")
+			}
+		})
+	}
+}
+
+func TestEnabledServeRejectsLegacyChatBeforeListenAndRecovery(t *testing.T) {
+	path := sendingDatabase(t)
+	cfg := serveConfig(path, true)
+	cfg.Anthropic.Model = "claude-opus-5"
+	cfg.Anthropic.APIKey = "opaque-private-secret"
+	transport := &demoRejectNetwork{}
+	original := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = original })
+	listenCalled := false
+	err := serve(context.Background(), cfg, serveOptions{}, serveDependencies{
+		StaticFS: fixtureFS(),
+		Listen: func(string, string) (net.Listener, error) {
+			listenCalled = true
+			return nil, errors.New("unexpected listen")
+		},
+	})
+	if !errors.Is(err, modelchat.ErrMigrationRequired) || listenCalled || transport.calls != 0 || strings.Contains(err.Error(), "private-secret") {
+		t.Fatalf("legacy Chat startup accepted: listen=%v HTTP=%d err=%v", listenCalled, transport.calls, err)
+	}
+	store, err := state.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	saved, err := store.GetJob(context.Background(), job.Topic, "2026-09-29")
+	if err != nil || saved.Status != "sending" {
+		t.Fatalf("invalid Chat startup recovered interrupted send: %+v %v", saved, err)
+	}
 }
 
 func TestServeSettingsMigratedBeforeStartupAndAllowMissingWebhook(t *testing.T) {

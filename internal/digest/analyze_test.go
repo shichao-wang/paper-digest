@@ -137,6 +137,37 @@ func TestDigestDeepSeekDefaultsUseChat(t *testing.T) {
 	}
 }
 
+func TestValidatedAnalyzerKeepsPerSummaryRequestBudget(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.URL.Path != "/v1/chat/completions" || r.Header.Get("Authorization") != "Bearer file-key" {
+			t.Error("validated analyzer routing is incorrect")
+		}
+		var request struct {
+			Model string `json:"model"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil || request.Model != defaultModel {
+			t.Error("validated analyzer did not use the digest default model")
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"摘要正文"},"finish_reason":"stop"}]}`))
+	}))
+	defer server.Close()
+	analyzer := DeepSeekAnalyzer{APIKey: "file-key", BaseURL: server.URL + "/v1", Model: " \n"}
+	if err := analyzer.Validate(); err != nil || calls != 0 {
+		t.Fatalf("validation must be offline: err=%v calls=%d", err, calls)
+	}
+	for _, id := range []string{"2609.12345", "2609.12346"} {
+		summary, err := analyzer.Analyze(context.Background(), papers.Paper{ID: id})
+		if err != nil || summary.Model != defaultModel || summary.Text != "摘要正文" {
+			t.Fatalf("validated analyzer request failed: summary=%+v err=%v", summary, err)
+		}
+	}
+	if calls != 2 {
+		t.Fatalf("expected one request per summary: calls=%d", calls)
+	}
+}
+
 func TestChatUsesFileSettingsInsteadOfEnvironment(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "environment-key")
 	t.Setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:1")

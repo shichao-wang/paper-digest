@@ -202,9 +202,9 @@ type serveDependencies struct {
 }
 
 func defaultWorker(cfg config.Config, store *state.Store) (worker, error) {
-	model := cfg.Anthropic.Model
-	if model == "" {
-		model = "deepseek-flash"
+	analyzer := digest.DeepSeekAnalyzer{Model: cfg.Anthropic.Model, APIKey: cfg.Anthropic.APIKey, BaseURL: cfg.Anthropic.BaseURL}
+	if err := analyzer.Validate(); err != nil {
+		return nil, err
 	}
 	return &job.Runner{
 		Store: store,
@@ -213,7 +213,7 @@ func defaultWorker(cfg config.Config, store *state.Store) (worker, error) {
 			defer cancel()
 			return papers.Fetch(fetchCtx, &http.Client{Timeout: 40 * time.Second}, "", 100)
 		},
-		Analyzer: digest.DeepSeekAnalyzer{Model: model, APIKey: cfg.Anthropic.APIKey, BaseURL: cfg.Anthropic.BaseURL},
+		Analyzer: analyzer,
 		Sender:   delivery.StoredFeishu{Store: store, Topic: job.Topic}, LookbackDays: cfg.Arxiv.LookbackDays, Now: time.Now,
 	}, nil
 }

@@ -92,7 +92,7 @@ func Fetch(ctx context.Context, client *http.Client, baseURL string, limit int) 
 	if err != nil {
 		return nil, fmt.Errorf("create arXiv request: %w", err)
 	}
-	resp, err := arxivclient.Client(client).Do(req)
+	resp, err := arxivclient.Do(client, req)
 	if err != nil {
 		return nil, fmt.Errorf("fetch arXiv feed: %w", err)
 	}
