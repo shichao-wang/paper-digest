@@ -3,6 +3,7 @@ import { useLocation, useRequest } from './hooks'
 import type { Digest, DigestDetail, Page, Paper, Topic } from './types'
 import WebhookSettings from './WebhookSettings'
 import TopicManagement from './TopicManagement'
+import MathText from './MathText'
 
 const statusLabels: Record<string, string> = {
   new: '待生成', processing: '生成中', ready: '已生成', sending: '发送中',
@@ -29,14 +30,14 @@ function PaperDetail({ paper, onBack }: { paper: Paper; onBack: () => void }) {
   return <article className="paper-detail">
     <button className="mobile-back" onClick={onBack}>‹ 返回论文列表</button>
     <div className="detail-meta"><span>arXiv {paper.id}{version}</span><Status value={paper.status} /></div>
-    <h2 className="paper-title">{paper.title}</h2>
+    <h2 className="paper-title"><MathText text={paper.title} inline /></h2>
     <p className="detail-authors">{paper.authors.join(', ') || '未提供作者'}</p>
     <dl className="dates"><div><dt>发表</dt><dd>{day(paper.publishedAt)}</dd></div><div><dt>更新</dt><dd>{day(paper.updatedAt)}</dd></div><div><dt>入选日报</dt><dd>{paper.digestDate}</dd></div></dl>
     <div className="source-links"><a href={arxivURL} target="_blank" rel="noreferrer">打开 arXiv <span aria-hidden="true">↗</span></a><a href={pdfURL} target="_blank" rel="noreferrer">查看 PDF <span aria-hidden="true">↗</span></a></div>
     <section className="summary-section"><div className="section-heading"><h3>中文要点</h3><span>基于公开摘要生成</span></div>
-      {paper.summary ? <><div className="summary-text">{paper.summary.text}</div><details className="provenance"><summary>生成来源</summary><p>模型：{paper.summary.model || '未记录'}<br />提示版本：{paper.summary.promptVersion || '未记录'}</p></details></> : <p className="summary-missing">暂无中文要点，可查看下面的原始摘要。</p>}
+      {paper.summary ? <><div className="summary-text"><MathText text={paper.summary.text} /></div><details className="provenance"><summary>生成来源</summary><p>模型：{paper.summary.model || '未记录'}<br />提示版本：{paper.summary.promptVersion || '未记录'}</p></details></> : <p className="summary-missing">暂无中文要点，可查看下面的原始摘要。</p>}
     </section>
-    <section className="abstract-section"><h3>原始摘要</h3><p lang="en" className="abstract-text">{paper.abstract || '未提供原始摘要。'}</p></section>
+    <section className="abstract-section"><h3>原始摘要</h3><p lang="en" className="abstract-text"><MathText text={paper.abstract || '未提供原始摘要。'} /></p></section>
   </article>
 }
 
@@ -177,7 +178,7 @@ export default function App() {
             {papers.error && <Message title="无法加载论文" retry={papers.retry}>{papers.error}</Message>}
             {papers.data?.items.length === 0 && <Message title={query || date || summary !== 'all' ? '没有符合筛选条件的论文' : '暂无已保存的精选论文'}>{query || date || summary !== 'all' ? '试试其他关键词，或清空筛选。' : '这里只展示已经入选日报并保存的论文。自动运行关闭时不会新增论文。'}</Message>}
             {papers.data?.items.map(paper => <button className="paper-row" key={`${topicID}/${paper.id}/${paper.digestDate}`} aria-current={selectedKey === `${topicID}/${paper.id}/${paper.digestDate}` ? 'true' : undefined} onClick={() => selectPaper(paper)}>
-              <div className="row-meta"><span>{paper.digestDate} 日报</span><span>{paper.summary ? '中文要点' : '原始摘要'}</span></div><h3 className="paper-title">{paper.title}</h3><p className="row-authors">{paper.authors.join(', ') || '未提供作者'}</p><p className="row-preview">{paper.summary?.text || paper.abstract}</p><div className="row-footer"><span>发表于 {day(paper.publishedAt)}</span><span>arXiv {paper.id}</span></div>
+              <div className="row-meta"><span>{paper.digestDate} 日报</span><span>{paper.summary ? '中文要点' : '原始摘要'}</span></div><h3 className="paper-title"><MathText text={paper.title} inline /></h3><p className="row-authors">{paper.authors.join(', ') || '未提供作者'}</p><p className="row-preview"><MathText text={paper.summary?.text || paper.abstract} inline /></p><div className="row-footer"><span>发表于 {day(paper.publishedAt)}</span><span>arXiv {paper.id}</span></div>
             </button>)}
             {papers.data && papers.data.total > 0 && <Pagination {...papers.data} onChange={value => { navigate({ page: String(value), paper: null, paperDate: null }); listRef.current?.scrollTo(0, 0) }} />}
           </>}
@@ -191,8 +192,8 @@ export default function App() {
             {digestDetail.data && <article className="digest-detail"><div className="detail-meta"><span>北京时间</span><Status value={digestDetail.data.status} /></div><h2>{digestDetail.data.date} 日报</h2><p className="digest-intro">{digestDetail.data.paperCount} 篇入选，{digestDetail.data.summaryCount} 篇已有中文要点</p>
               {digestDetail.data.status === 'unknown' && <p className="notice">发送结果尚未确认。请在飞书群核对送达情况。</p>}
               {digestDetail.data.items.length === 0 && <p className="summary-missing">当天没有保存的入选论文。</p>}
-              <div className="digest-papers">{digestDetail.data.items.map(paper => <button key={paper.id} onClick={() => { navigate({ view: null, date: paper.digestDate, q: null, summary: null, page: null, digest: null, paper: paper.id, paperDate: paper.digestDate }); detailRef.current?.scrollTo(0, 0) }}><h3 className="paper-title">{paper.title}</h3><p>{paper.summary ? '阅读中文要点与原始摘要' : '阅读原始摘要'}</p></button>)}</div>
-              <section className="digest-message"><h3>日报正文</h3>{digestDetail.data.message ? <div className="summary-text">{digestDetail.data.message}</div> : <p className="summary-missing">暂无完整日报正文。</p>}</section>
+              <div className="digest-papers">{digestDetail.data.items.map(paper => <button key={paper.id} onClick={() => { navigate({ view: null, date: paper.digestDate, q: null, summary: null, page: null, digest: null, paper: paper.id, paperDate: paper.digestDate }); detailRef.current?.scrollTo(0, 0) }}><h3 className="paper-title"><MathText text={paper.title} inline /></h3><p>{paper.summary ? '阅读中文要点与原始摘要' : '阅读原始摘要'}</p></button>)}</div>
+              <section className="digest-message"><h3>日报正文</h3>{digestDetail.data.message ? <div className="summary-text"><MathText text={digestDetail.data.message} /></div> : <p className="summary-missing">暂无完整日报正文。</p>}</section>
             </article>}
           </> : <>
             {explicitPaper && !paperDetail.data && <button className="mobile-back" onClick={back}>‹ 返回论文列表</button>}
