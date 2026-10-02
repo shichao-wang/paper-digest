@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"path"
 	"regexp"
 	"strings"
 	"time"
@@ -27,7 +26,13 @@ type Paper struct {
 	Abstract  string
 	URL       string
 
-	categories []string
+	Categories      []string
+	PrimaryCategory string
+	DOI             string
+	JournalRef      string
+	Comment         string
+
+	categories []string // Kept for the legacy Select path.
 }
 
 type atomFeed struct {
@@ -35,19 +40,27 @@ type atomFeed struct {
 }
 
 type atomEntry struct {
-	ID         string       `xml:"id"`
-	Title      string       `xml:"title"`
-	Published  string       `xml:"published"`
-	Updated    string       `xml:"updated"`
-	Summary    string       `xml:"summary"`
-	Authors    []atomAuthor `xml:"author"`
-	Categories []struct {
+	ID              string       `xml:"http://www.w3.org/2005/Atom id"`
+	Title           string       `xml:"http://www.w3.org/2005/Atom title"`
+	Published       string       `xml:"http://www.w3.org/2005/Atom published"`
+	Updated         string       `xml:"http://www.w3.org/2005/Atom updated"`
+	Summary         string       `xml:"http://www.w3.org/2005/Atom summary"`
+	Authors         []atomAuthor `xml:"http://www.w3.org/2005/Atom author"`
+	PrimaryCategory struct {
 		Term string `xml:"term,attr"`
-	} `xml:"category"`
+	} `xml:"http://arxiv.org/schemas/atom primary_category"`
+	DOI          string   `xml:"http://arxiv.org/schemas/atom doi"`
+	JournalRef   string   `xml:"http://arxiv.org/schemas/atom journal_ref"`
+	Comment      string   `xml:"http://arxiv.org/schemas/atom comment"`
+	AnnounceType string   `xml:"http://arxiv.org/schemas/atom announce_type"`
+	Creators     []string `xml:"http://purl.org/dc/elements/1.1/ creator"`
+	Categories   []struct {
+		Term string `xml:"term,attr"`
+	} `xml:"http://www.w3.org/2005/Atom category"`
 }
 
 type atomAuthor struct {
-	Name string `xml:"name"`
+	Name string `xml:"http://www.w3.org/2005/Atom name"`
 }
 
 func Fetch(ctx context.Context, client *http.Client, baseURL string, limit int) ([]Paper, error) {
@@ -134,29 +147,38 @@ func parseEntry(entry atomEntry) (Paper, error) {
 
 	versionSuffix := version
 	return Paper{
-		ID:         id,
-		Version:    version,
-		Title:      normalizeSpace(entry.Title),
-		Authors:    authors,
-		Published:  published,
-		Updated:    updated,
-		Abstract:   normalizeSpace(entry.Summary),
-		URL:        "https://arxiv.org/abs/" + strings.TrimPrefix(id, "arxiv:") + versionSuffix,
-		categories: categories,
+		ID:              id,
+		Version:         version,
+		Title:           normalizeSpace(entry.Title),
+		Authors:         authors,
+		Published:       published,
+		Updated:         updated,
+		Abstract:        normalizeSpace(entry.Summary),
+		URL:             "https://arxiv.org/abs/" + strings.TrimPrefix(id, "arxiv:") + versionSuffix,
+		Categories:      append([]string(nil), categories...),
+		PrimaryCategory: strings.TrimSpace(entry.PrimaryCategory.Term),
+		DOI:             normalizeSpace(entry.DOI),
+		JournalRef:      normalizeSpace(entry.JournalRef),
+		Comment:         normalizeSpace(entry.Comment),
+		categories:      categories,
 	}, nil
 }
 
 func parseID(raw string) (string, string, error) {
 	candidate := strings.TrimSpace(raw)
-	if strings.HasPrefix(strings.ToLower(candidate), "arxiv:") {
+	if strings.HasPrefix(strings.ToLower(candidate), "oai:arxiv.org:") {
+		candidate = candidate[len("oai:arxiv.org:"):]
+	} else if strings.HasPrefix(strings.ToLower(candidate), "arxiv:") {
 		candidate = candidate[len("arxiv:"):]
 	}
-	if parsed, err := url.Parse(candidate); err == nil && parsed.Path != "" {
-		candidate = strings.TrimPrefix(parsed.Path, "/abs/")
-		if candidate == parsed.Path {
-			candidate = path.Base(parsed.Path)
+	if strings.Contains(candidate, "://") {
+		parsed, err := url.Parse(candidate)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") ||
+			(parsed.Host != "arxiv.org" && parsed.Host != "export.arxiv.org") || parsed.User != nil ||
+			parsed.RawQuery != "" || parsed.Fragment != "" || !strings.HasPrefix(parsed.Path, "/abs/") {
+			return "", "", fmt.Errorf("invalid arXiv ID URL %q", raw)
 		}
-		candidate = strings.Trim(candidate, "/")
+		candidate = strings.TrimPrefix(parsed.Path, "/abs/")
 	}
 	match := arxivIDPattern.FindStringSubmatch(candidate)
 	if match == nil {

@@ -21,6 +21,7 @@ import (
 	"github.com/shichao-wang/paper-digest/internal/config"
 	"github.com/shichao-wang/paper-digest/internal/delivery"
 	"github.com/shichao-wang/paper-digest/internal/digest"
+	"github.com/shichao-wang/paper-digest/internal/document"
 	"github.com/shichao-wang/paper-digest/internal/job"
 	"github.com/shichao-wang/paper-digest/internal/papers"
 	"github.com/shichao-wang/paper-digest/internal/state"
@@ -49,7 +50,7 @@ func run(args []string) error {
 		configPath, args = args[1], args[2:]
 	}
 	if len(args) == 0 {
-		return errors.New("用法: paper-digest [--config <文件>] serve|health|status [日期]|preview <fixture.json>|backup <文件>|send-test --topic <id> --confirm")
+		return errors.New("用法: paper-digest [--config <文件>] serve|collect|process|retry <taskID>|library-status|reanalyze <id> <vN>|backup-library <目录>|restore-library <备份> <新目录>|demo|health|status [日期]|preview <fixture.json>|backup <文件>|send-test --topic <id> --confirm")
 	}
 	if args[0] == "send-test" {
 		if len(args) != 4 || args[1] != "--topic" || args[2] == "" || args[3] != "--confirm" {
@@ -98,8 +99,28 @@ func run(args []string) error {
 		}
 		return checkHealth(context.Background(), *endpoint, &http.Client{Timeout: 5 * time.Second})
 	}
+	if args[0] == "restore-library" {
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
+		return runLibraryCommand(ctx, config.Config{}, args)
+	}
+	if isLibraryCommand(args[0]) {
+		if err := validateLibraryArgs(args); err != nil {
+			return err
+		}
+		cfg, err := config.Load(configPath)
+		if err != nil {
+			return err
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
+		return runLibraryCommand(ctx, cfg, args)
+	}
 	if args[0] != "status" && args[0] != "backup" && args[0] != "serve" {
 		return fmt.Errorf("未知命令 %q", args[0])
+	}
+	if args[0] == "status" && len(args) > 2 {
+		return errors.New("用法: paper-digest status [日期]")
 	}
 	if args[0] == "backup" && len(args) != 2 {
 		return errors.New("用法: paper-digest backup <未存在的目标文件>")
@@ -163,15 +184,16 @@ type worker interface {
 }
 
 type serveDependencies struct {
-	StaticFS  fs.FS
-	Listen    func(string, string) (net.Listener, error)
-	NewWorker func(config.Config, *state.Store, string) (worker, error)
+	StaticFS         fs.FS
+	Listen           func(string, string) (net.Listener, error)
+	NewWorker        func(config.Config, *state.Store, string) (worker, error)
+	NewLibraryWorker func(config.Config, *state.Store) (worker, error)
 }
 
 func defaultWorker(cfg config.Config, store *state.Store, webhook string) (worker, error) {
 	model := cfg.Anthropic.Model
 	if model == "" {
-		model = "claude-opus-5"
+		model = "deepseek-flash"
 	}
 	return &job.Runner{
 		Store: store,
@@ -180,7 +202,7 @@ func defaultWorker(cfg config.Config, store *state.Store, webhook string) (worke
 			defer cancel()
 			return papers.Fetch(fetchCtx, &http.Client{Timeout: 40 * time.Second}, "", 100)
 		},
-		Analyzer: digest.ClaudeAnalyzer{Model: model, APIKey: cfg.Anthropic.APIKey, BaseURL: cfg.Anthropic.BaseURL},
+		Analyzer: digest.DeepSeekAnalyzer{Model: model, APIKey: cfg.Anthropic.APIKey, BaseURL: cfg.Anthropic.BaseURL},
 		Sender:   delivery.Feishu{WebhookURL: webhook}, LookbackDays: cfg.Arxiv.LookbackDays, Now: time.Now,
 	}, nil
 }
@@ -200,6 +222,17 @@ func serve(parent context.Context, cfg config.Config, options serveOptions, deps
 			return err
 		}
 	}
+	libraryEnabled := cfg.Library.CollectEnabled || cfg.Library.ProcessEnabled
+	if libraryEnabled {
+		if err := cfg.Library.Validate(); err != nil {
+			return err
+		}
+	}
+	if cfg.Library.ProcessEnabled {
+		if err := validateLibraryProcessing(cfg); err != nil {
+			return err
+		}
+	}
 	store, err := state.Open(path)
 	if err != nil {
 		return err
@@ -209,7 +242,7 @@ func serve(parent context.Context, cfg config.Config, options serveOptions, deps
 	if staticFS == nil {
 		staticFS = os.DirFS(options.WebDir)
 	}
-	handler, err := web.New(store, staticFS)
+	handler, err := web.NewWithDocuments(store, staticFS, &document.Repository{Root: cfg.Library.DocumentDir})
 	if err != nil {
 		return err
 	}
@@ -225,6 +258,20 @@ func serve(parent context.Context, cfg config.Config, options serveOptions, deps
 		}
 		if runner == nil {
 			return errors.New("worker initialization returned nil")
+		}
+	}
+	var libraryRunner worker
+	if libraryEnabled {
+		factory := deps.NewLibraryWorker
+		if factory == nil {
+			factory = defaultLibraryWorker
+		}
+		libraryRunner, err = factory(cfg, store)
+		if err != nil {
+			return err
+		}
+		if libraryRunner == nil {
+			return errors.New("library worker initialization returned nil")
 		}
 	}
 	listen := deps.Listen
@@ -265,13 +312,26 @@ func serve(parent context.Context, cfg config.Config, options serveOptions, deps
 	}
 	httpDone := make(chan error, 1)
 	go func() { httpDone <- server.Serve(listener) }()
-	var workerDone chan error
-	if runner != nil {
-		workerDone = make(chan error, 1)
-		go func() { workerDone <- runner.Serve(ctx, slog.Default()) }()
+	type workerResult struct {
+		name string
+		err  error
+	}
+	workerDone := make(chan workerResult, 2)
+	workerCount := 0
+	for _, entry := range []struct {
+		name   string
+		runner worker
+	}{{"delivery", runner}, {"library", libraryRunner}} {
+		if entry.runner != nil {
+			workerCount++
+			go func(name string, runner worker) {
+				workerDone <- workerResult{name, runner.Serve(ctx, slog.Default())}
+			}(entry.name, entry.runner)
+		}
 	}
 	var result error
-	var httpStopped, workerStopped bool
+	var httpStopped bool
+	workersStopped := 0
 	select {
 	case <-parent.Done():
 	case result = <-httpDone:
@@ -279,15 +339,20 @@ func serve(parent context.Context, cfg config.Config, options serveOptions, deps
 		if errors.Is(result, http.ErrServerClosed) {
 			result = nil
 		}
-	case result = <-workerDone:
-		workerStopped = true
-		if parent.Err() != nil && errors.Is(result, parent.Err()) {
+	case stopped := <-workerDone:
+		workersStopped++
+		if parent.Err() != nil && errors.Is(stopped.err, parent.Err()) {
 			result = nil
-		} else if result == nil {
-			result = errors.New("worker stopped unexpectedly")
+		} else if stopped.err == nil {
+			result = fmt.Errorf("%s worker stopped unexpectedly", stopped.name)
+		} else {
+			result = fmt.Errorf("%s worker: %w", stopped.name, stopped.err)
 		}
 	}
 	cancel()
+	handlerMu.Lock()
+	drained = true
+	handlerMu.Unlock()
 	shutdownCtx, stop := context.WithTimeout(context.Background(), 10*time.Second)
 	defer stop()
 	if err := server.Shutdown(shutdownCtx); err != nil {
@@ -300,13 +365,12 @@ func serve(parent context.Context, cfg config.Config, options serveOptions, deps
 			result = errors.Join(result, err)
 		}
 	}
-	handlerMu.Lock()
-	drained = true
-	handlerMu.Unlock()
 	handlers.Wait()
-	if workerDone != nil && !workerStopped {
-		if err := <-workerDone; err != nil && !errors.Is(err, context.Canceled) {
-			result = errors.Join(result, err)
+	for workersStopped < workerCount {
+		stopped := <-workerDone
+		workersStopped++
+		if stopped.err != nil && !errors.Is(stopped.err, context.Canceled) && !(parent.Err() != nil && errors.Is(stopped.err, parent.Err())) {
+			result = errors.Join(result, fmt.Errorf("%s worker: %w", stopped.name, stopped.err))
 		}
 	}
 	return result

@@ -8,18 +8,70 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
 
 var topicIDPattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
+var categoryPattern = regexp.MustCompile(`^[a-z]+(?:\.[A-Z]{2})?$`)
 
 type Topic struct {
 	ID         string `json:"id"`
 	WebhookURL string `json:"webhook_url"`
 }
 
+type Library struct {
+	CollectEnabled     bool     `json:"collect_enabled"`
+	ProcessEnabled     bool     `json:"process_enabled"`
+	Categories         []string `json:"categories"`
+	DocumentDir        string   `json:"document_dir"`
+	Concurrency        int      `json:"concurrency"`
+	PollSeconds        int      `json:"poll_seconds"`
+	MaxRequests        int      `json:"max_requests"`
+	MaxTokens          int64    `json:"max_tokens"`
+	TaskTimeoutSeconds int      `json:"task_timeout_seconds"`
+}
+
+func (l *Library) defaults(databasePath string) {
+	if len(l.Categories) == 0 {
+		l.Categories = []string{"cs.IR", "cs.LG", "cs.AI", "cs.CL", "stat.ML"}
+	}
+	if l.DocumentDir == "" {
+		l.DocumentDir = filepath.Join(filepath.Dir(databasePath), "library")
+	}
+	if l.Concurrency == 0 {
+		l.Concurrency = 1
+	}
+	if l.PollSeconds == 0 {
+		l.PollSeconds = 900
+	}
+	if l.MaxRequests == 0 {
+		l.MaxRequests = 120
+	}
+	if l.MaxTokens == 0 {
+		l.MaxTokens = 500000
+	}
+	if l.TaskTimeoutSeconds == 0 {
+		l.TaskTimeoutSeconds = 1800
+	}
+}
+func (l Library) Validate() error {
+	if l.Concurrency < 1 || l.Concurrency > 8 || l.PollSeconds < 60 || l.MaxRequests < 1 || l.MaxRequests > 1000 || l.MaxTokens < 4096 || l.TaskTimeoutSeconds < 60 || l.TaskTimeoutSeconds > 7200 || strings.TrimSpace(l.DocumentDir) == "" {
+		return errors.New("library 的并发、轮询、预算、超时或文档目录不合法")
+	}
+	seen := map[string]bool{}
+	for _, c := range l.Categories {
+		if !categoryPattern.MatchString(c) || seen[c] {
+			return errors.New("library.categories 包含无效或重复分类")
+		}
+		seen[c] = true
+	}
+	return nil
+}
+
 type Config struct {
+	Library  Library `json:"library"`
 	Database struct {
 		Path string `json:"path"`
 	} `json:"database"`
@@ -73,6 +125,10 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.Arxiv.LookbackDays < 1 || cfg.Arxiv.LookbackDays > 30 {
 		return Config{}, errors.New("arxiv.lookback_days 必须为 1 到 30")
+	}
+	cfg.Library.defaults(cfg.Database.Path)
+	if err := cfg.Library.Validate(); err != nil {
+		return Config{}, err
 	}
 	return cfg, nil
 }

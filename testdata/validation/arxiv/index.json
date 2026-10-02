@@ -1,0 +1,590 @@
+{
+  "created_at": "2026-10-01T17:12:46.981244+00:00",
+  "fixtures": [
+    {
+      "file": "real-entries.xml",
+      "kind": "real public extracts; wrapper is synthetic, entries unchanged",
+      "bytes": 11451,
+      "sha256": "3d35cc2f6a225b35048757543b06d4ab732b99a85e8bc07e4b9f263a76adb15f"
+    },
+    {
+      "file": "real-cs.IR-list-extract.html",
+      "kind": "real public structural extracts; incomplete document",
+      "bytes": 23815,
+      "sha256": "8646ac9af67ae1999842743fe702da513feaec63d34f4052f37ae15223006c63"
+    },
+    {
+      "file": "synthetic-empty.xml",
+      "kind": "synthetic empty",
+      "bytes": 344,
+      "sha256": "2967436a9fbb066c5baaec2b60c38214237d5b2a03bddd7f6512ec3bca64b827"
+    },
+    {
+      "file": "synthetic-truncated.xml",
+      "kind": "synthetic truncated",
+      "bytes": 299,
+      "sha256": "382c2b9dc306c13c288919f4603a32ed2e1b24e51a1dd5c24c6ac4618403e86c"
+    }
+  ],
+  "entry_origins": [
+    {
+      "entry_id": "oai:arXiv.org:2609.38353v1",
+      "feed_category": "cs.IR",
+      "source_sha256": "4f2cc27f0c7dc26a095aa87a0bbb6ec8f47bf7b7eb3d8461d7cfd3cf28ccb79b",
+      "source_url": "https://rss.arxiv.org/atom/cs.IR",
+      "fetched_at": "2026-10-01T17:03:42.503030+00:00"
+    },
+    {
+      "entry_id": "oai:arXiv.org:2602.19001v2",
+      "feed_category": "cs.IR",
+      "source_sha256": "4f2cc27f0c7dc26a095aa87a0bbb6ec8f47bf7b7eb3d8461d7cfd3cf28ccb79b",
+      "source_url": "https://rss.arxiv.org/atom/cs.IR",
+      "fetched_at": "2026-10-01T17:03:42.503030+00:00"
+    },
+    {
+      "entry_id": "oai:arXiv.org:2603.02561v2",
+      "feed_category": "cs.IR",
+      "source_sha256": "4f2cc27f0c7dc26a095aa87a0bbb6ec8f47bf7b7eb3d8461d7cfd3cf28ccb79b",
+      "source_url": "https://rss.arxiv.org/atom/cs.IR",
+      "fetched_at": "2026-10-01T17:03:42.503030+00:00"
+    },
+    {
+      "entry_id": "oai:arXiv.org:2605.29307v2",
+      "feed_category": "cs.IR",
+      "source_sha256": "4f2cc27f0c7dc26a095aa87a0bbb6ec8f47bf7b7eb3d8461d7cfd3cf28ccb79b",
+      "source_url": "https://rss.arxiv.org/atom/cs.IR",
+      "fetched_at": "2026-10-01T17:03:42.503030+00:00"
+    },
+    {
+      "entry_id": "oai:arXiv.org:2609.38353v1",
+      "feed_category": "cs.AI",
+      "source_sha256": "e9854a7e626cbdc1d132b527e38972ad58e128fad97ab9c5dc8515337620a617",
+      "source_url": "https://rss.arxiv.org/atom/cs.AI",
+      "fetched_at": "2026-10-01T17:03:55.814352+00:00"
+    }
+  ],
+  "list_origin": {
+    "url": "https://arxiv.org/list/cs.IR/new?show=1000",
+    "finished_at": "2026-10-01T17:04:04.640190+00:00",
+    "sha256": "83cd1a682154dcc642a4517b5dbc87c193a4183e6777ebc282c70f5816477de7",
+    "bytes": 152738
+  },
+  "source_manifest": [
+    {
+      "name": "atom-cs.IR",
+      "url": "https://rss.arxiv.org/atom/cs.IR",
+      "requested_at": "2026-10-01T17:03:40.961377+00:00",
+      "finished_at": "2026-10-01T17:03:42.503030+00:00",
+      "status": 200,
+      "file": "atom-cs.IR.xml",
+      "bytes": 93212,
+      "sha256": "4f2cc27f0c7dc26a095aa87a0bbb6ec8f47bf7b7eb3d8461d7cfd3cf28ccb79b"
+    },
+    {
+      "name": "atom-cs.LG",
+      "url": "https://rss.arxiv.org/atom/cs.LG",
+      "requested_at": "2026-10-01T17:03:43.965965+00:00",
+      "finished_at": "2026-10-01T17:03:46.721075+00:00",
+      "status": 200,
+      "file": "atom-cs.LG.xml",
+      "bytes": 1381151,
+      "sha256": "73aef0d613c68adb833bc81a89aafa7eebc389605db0fd3d335ce1440563e115"
+    },
+    {
+      "name": "atom-cs.AI",
+      "url": "https://rss.arxiv.org/atom/cs.AI",
+      "requested_at": "2026-10-01T17:03:46.969756+00:00",
+      "finished_at": "2026-10-01T17:03:55.814352+00:00",
+      "status": 200,
+      "file": "atom-cs.AI.xml",
+      "bytes": 1356611,
+      "sha256": "e9854a7e626cbdc1d132b527e38972ad58e128fad97ab9c5dc8515337620a617"
+    },
+    {
+      "name": "atom-cs.CL",
+      "url": "https://rss.arxiv.org/atom/cs.CL",
+      "requested_at": "2026-10-01T17:03:55.814773+00:00",
+      "finished_at": "2026-10-01T17:03:59.322974+00:00",
+      "status": 200,
+      "file": "atom-cs.CL.xml",
+      "bytes": 587391,
+      "sha256": "06d5f56fcdfa852a974af69660d632c2b00be942ed24460604324f6415b3b006"
+    },
+    {
+      "name": "atom-stat.ML",
+      "url": "https://rss.arxiv.org/atom/stat.ML",
+      "requested_at": "2026-10-01T17:03:59.323597+00:00",
+      "finished_at": "2026-10-01T17:04:00.716595+00:00",
+      "status": 200,
+      "file": "atom-stat.ML.xml",
+      "bytes": 168131,
+      "sha256": "8007dc1abae82487de43b79f50dd68c26d331aa475928dfacf2b3a3d08b16ca1"
+    },
+    {
+      "name": "new-cs.IR",
+      "url": "https://arxiv.org/list/cs.IR/new?show=1000",
+      "requested_at": "2026-10-01T17:04:02.326553+00:00",
+      "finished_at": "2026-10-01T17:04:04.640190+00:00",
+      "status": 200,
+      "file": "new-cs.IR.html",
+      "bytes": 152738,
+      "sha256": "83cd1a682154dcc642a4517b5dbc87c193a4183e6777ebc282c70f5816477de7"
+    },
+    {
+      "name": "new-cs.LG",
+      "url": "https://arxiv.org/list/cs.LG/new?show=1000",
+      "requested_at": "2026-10-01T17:04:05.331028+00:00",
+      "finished_at": "2026-10-01T17:04:19.760059+00:00",
+      "status": 200,
+      "file": "new-cs.LG.html",
+      "bytes": 1998496,
+      "sha256": "58697417a89b72ba72f557d82467bc0615dc9e4795eb555a30064179abc6bff9"
+    },
+    {
+      "name": "new-cs.AI",
+      "url": "https://arxiv.org/list/cs.AI/new?show=1000",
+      "requested_at": "2026-10-01T17:04:19.760569+00:00",
+      "finished_at": "2026-10-01T17:04:28.842553+00:00",
+      "status": 200,
+      "file": "new-cs.AI.html",
+      "bytes": 2001991,
+      "sha256": "cb5eb703ee496ac55ed9b4ddb4d94aff6a53eaf539d21c4dda519af1c2b60ba3"
+    },
+    {
+      "name": "new-cs.CL",
+      "url": "https://arxiv.org/list/cs.CL/new?show=1000",
+      "requested_at": "2026-10-01T17:04:28.843504+00:00",
+      "finished_at": "2026-10-01T17:04:33.984230+00:00",
+      "status": 200,
+      "file": "new-cs.CL.html",
+      "bytes": 880216,
+      "sha256": "2bc3b65ac833e055aa6bf3875495546e9509353d59b26858da9e810795ffacb8"
+    },
+    {
+      "name": "new-stat.ML",
+      "url": "https://arxiv.org/list/stat.ML/new?show=1000",
+      "requested_at": "2026-10-01T17:04:33.984627+00:00",
+      "finished_at": "2026-10-01T17:04:38.060353+00:00",
+      "status": 200,
+      "file": "new-stat.ML.html",
+      "bytes": 241991,
+      "sha256": "51a2cd0bcecb18cc896f4a5380e9aa795a1d574b4c0463f7303e5bb0fe92dad2"
+    },
+    {
+      "name": "recent-cs.IR",
+      "url": "https://arxiv.org/list/cs.IR/recent?show=250",
+      "requested_at": "2026-10-01T17:04:38.060644+00:00",
+      "finished_at": "2026-10-01T17:04:40.219623+00:00",
+      "status": 200,
+      "file": "recent-cs.IR.html",
+      "bytes": 297456,
+      "sha256": "c36407fbf8cf6546afd75898f574ccd29f974f1aa66abe440f0025f9ba2be2d6"
+    },
+    {
+      "name": "pastweek-cs.IR",
+      "url": "https://arxiv.org/list/cs.IR/pastweek?show=250",
+      "requested_at": "2026-10-01T17:04:41.065697+00:00",
+      "finished_at": "2026-10-01T17:04:44.031962+00:00",
+      "status": 200,
+      "file": "pastweek-cs.IR.html",
+      "bytes": 297460,
+      "sha256": "5a2edfea39c69ba46deb0aceaedabe9c4ad85c2b24619a90358f617c672efce2"
+    },
+    {
+      "name": "dated-cs.IR",
+      "url": "https://arxiv.org/list/cs.IR/2026-10-01?show=1000",
+      "requested_at": "2026-10-01T17:04:44.070750+00:00",
+      "finished_at": "2026-10-01T17:04:45.146602+00:00",
+      "status": 400,
+      "file": "dated-cs.IR.error.txt",
+      "bytes": 7410,
+      "sha256": "3116d20e8d260535815fa61f7952b8ba85c9d3463ac32faef86ebb966fe9d5d3",
+      "error": "HTTP Error 400: Bad Request"
+    },
+    {
+      "name": "rss-doc",
+      "url": "https://info.arxiv.org/help/rss.html",
+      "requested_at": "2026-10-01T17:04:47.074702+00:00",
+      "finished_at": "2026-10-01T17:04:49.613103+00:00",
+      "status": 200,
+      "file": "rss-doc.html",
+      "bytes": 88665,
+      "sha256": "edc73107fc55074031eb2681b6b6e313483beee64b28d2e5a6ec3230550a9177"
+    },
+    {
+      "name": "api-doc",
+      "url": "https://info.arxiv.org/help/api/user-manual.html",
+      "requested_at": "2026-10-01T17:04:50.076720+00:00",
+      "finished_at": "2026-10-01T17:04:52.393073+00:00",
+      "status": 200,
+      "file": "api-doc.html",
+      "bytes": 147746,
+      "sha256": "a4f8c339c191e35addd5a658114015f3a44000de89ec15ba633836a6c5db57b9"
+    }
+  ],
+  "statistics": {
+    "comparisons": {
+      "cs.IR": {
+        "result": "passed",
+        "atom_count": 41,
+        "list_count": 41,
+        "declared_list_total": 41,
+        "batch_date": "2026-10-01",
+        "atom_publication_dates": [
+          "2026-10-01"
+        ],
+        "type_counts": {
+          "new": 16,
+          "cross": 13,
+          "replace": 8,
+          "replace-cross": 4
+        },
+        "section_checks": [
+          {
+            "heading": "New submissions (showing 16 of 16 entries)",
+            "complete": true,
+            "same_ids": true
+          },
+          {
+            "heading": "Cross submissions (showing 13 of 13 entries)",
+            "complete": true,
+            "same_ids": true
+          },
+          {
+            "heading": "Replacement submissions (showing 12 of 12 entries)",
+            "complete": true,
+            "same_ids": true
+          }
+        ],
+        "atom_only": [],
+        "list_only": [],
+        "same_ids": true,
+        "note": "Pass proves this captured batch only; no future completeness guarantee"
+      },
+      "cs.LG": {
+        "result": "passed",
+        "atom_count": 638,
+        "list_count": 638,
+        "declared_list_total": 638,
+        "batch_date": "2026-10-01",
+        "atom_publication_dates": [
+          "2026-10-01"
+        ],
+        "type_counts": {
+          "new": 256,
+          "cross": 172,
+          "replace": 133,
+          "replace-cross": 77
+        },
+        "section_checks": [
+          {
+            "heading": "New submissions (showing 256 of 256 entries)",
+            "complete": true,
+            "same_ids": true
+          },
+          {
+            "heading": "Cross submissions (showing 172 of 172 entries)",
+            "complete": true,
+            "same_ids": true
+          },
+          {
+            "heading": "Replacement submissions (showing 210 of 210 entries)",
+            "complete": true,
+            "same_ids": true
+          }
+        ],
+        "atom_only": [],
+        "list_only": [],
+        "same_ids": true,
+        "note": "Pass proves this captured batch only; no future completeness guarantee"
+      },
+      "cs.AI": {
+        "result": "passed",
+        "atom_count": 613,
+        "list_count": 613,
+        "declared_list_total": 613,
+        "batch_date": "2026-10-01",
+        "atom_publication_dates": [
+          "2026-10-01"
+        ],
+        "type_counts": {
+          "new": 133,
+          "cross": 261,
+          "replace": 72,
+          "replace-cross": 147
+        },
+        "section_checks": [
+          {
+            "heading": "New submissions (showing 133 of 133 entries)",
+            "complete": true,
+            "same_ids": true
+          },
+          {
+            "heading": "Cross submissions (showing 261 of 261 entries)",
+            "complete": true,
+            "same_ids": true
+          },
+          {
+            "heading": "Replacement submissions (showing 219 of 219 entries)",
+            "complete": true,
+            "same_ids": true
+          }
+        ],
+        "atom_only": [],
+        "list_only": [],
+        "same_ids": true,
+        "note": "Pass proves this captured batch only; no future completeness guarantee"
+      },
+      "cs.CL": {
+        "result": "passed",
+        "atom_count": 269,
+        "list_count": 269,
+        "declared_list_total": 269,
+        "batch_date": "2026-10-01",
+        "atom_publication_dates": [
+          "2026-10-01"
+        ],
+        "type_counts": {
+          "new": 115,
+          "cross": 64,
+          "replace": 50,
+          "replace-cross": 40
+        },
+        "section_checks": [
+          {
+            "heading": "New submissions (showing 115 of 115 entries)",
+            "complete": true,
+            "same_ids": true
+          },
+          {
+            "heading": "Cross submissions (showing 64 of 64 entries)",
+            "complete": true,
+            "same_ids": true
+          },
+          {
+            "heading": "Replacement submissions (showing 90 of 90 entries)",
+            "complete": true,
+            "same_ids": true
+          }
+        ],
+        "atom_only": [],
+        "list_only": [],
+        "same_ids": true,
+        "note": "Pass proves this captured batch only; no future completeness guarantee"
+      },
+      "stat.ML": {
+        "result": "passed",
+        "atom_count": 81,
+        "list_count": 81,
+        "declared_list_total": 81,
+        "batch_date": "2026-10-01",
+        "atom_publication_dates": [
+          "2026-10-01"
+        ],
+        "type_counts": {
+          "new": 23,
+          "cross": 31,
+          "replace": 11,
+          "replace-cross": 16
+        },
+        "section_checks": [
+          {
+            "heading": "New submissions (showing 23 of 23 entries)",
+            "complete": true,
+            "same_ids": true
+          },
+          {
+            "heading": "Cross submissions (showing 31 of 31 entries)",
+            "complete": true,
+            "same_ids": true
+          },
+          {
+            "heading": "Replacement submissions (showing 27 of 27 entries)",
+            "complete": true,
+            "same_ids": true
+          }
+        ],
+        "atom_only": [],
+        "list_only": [],
+        "same_ids": true,
+        "note": "Pass proves this captured batch only; no future completeness guarantee"
+      }
+    },
+    "dedup": {
+      "occurrences": 1642,
+      "unique_id_version": 1155,
+      "cross_category_examples": [
+        {
+          "id": "2609.38353",
+          "version": 1,
+          "categories": [
+            "cs.IR",
+            "cs.AI"
+          ]
+        },
+        {
+          "id": "2609.38473",
+          "version": 1,
+          "categories": [
+            "cs.IR",
+            "cs.LG",
+            "cs.AI"
+          ]
+        },
+        {
+          "id": "2609.38822",
+          "version": 1,
+          "categories": [
+            "cs.IR",
+            "cs.AI"
+          ]
+        },
+        {
+          "id": "2609.39007",
+          "version": 1,
+          "categories": [
+            "cs.IR",
+            "cs.LG"
+          ]
+        },
+        {
+          "id": "2609.40241",
+          "version": 1,
+          "categories": [
+            "cs.IR",
+            "cs.CL"
+          ]
+        },
+        {
+          "id": "2602.19001",
+          "version": 2,
+          "categories": [
+            "cs.IR",
+            "cs.AI",
+            "cs.CL"
+          ]
+        },
+        {
+          "id": "2609.38289",
+          "version": 1,
+          "categories": [
+            "cs.IR",
+            "cs.LG"
+          ]
+        },
+        {
+          "id": "2609.38374",
+          "version": 1,
+          "categories": [
+            "cs.IR",
+            "cs.LG",
+            "cs.CL"
+          ]
+        },
+        {
+          "id": "2609.38639",
+          "version": 1,
+          "categories": [
+            "cs.IR",
+            "cs.AI"
+          ]
+        },
+        {
+          "id": "2609.38743",
+          "version": 1,
+          "categories": [
+            "cs.IR",
+            "cs.AI"
+          ]
+        },
+        {
+          "id": "2609.38861",
+          "version": 1,
+          "categories": [
+            "cs.IR",
+            "cs.CL"
+          ]
+        },
+        {
+          "id": "2609.39013",
+          "version": 1,
+          "categories": [
+            "cs.IR",
+            "cs.CL"
+          ]
+        },
+        {
+          "id": "2609.39225",
+          "version": 1,
+          "categories": [
+            "cs.IR",
+            "cs.CL"
+          ]
+        },
+        {
+          "id": "2609.39358",
+          "version": 1,
+          "categories": [
+            "cs.IR",
+            "cs.LG",
+            "cs.AI",
+            "cs.CL"
+          ]
+        },
+        {
+          "id": "2609.39975",
+          "version": 1,
+          "categories": [
+            "cs.IR",
+            "cs.AI",
+            "cs.CL"
+          ]
+        },
+        {
+          "id": "2603.02561",
+          "version": 2,
+          "categories": [
+            "cs.IR",
+            "cs.LG"
+          ]
+        },
+        {
+          "id": "2605.23916",
+          "version": 2,
+          "categories": [
+            "cs.IR",
+            "cs.AI"
+          ]
+        },
+        {
+          "id": "2608.13786",
+          "version": 2,
+          "categories": [
+            "cs.IR",
+            "cs.AI",
+            "cs.CL"
+          ]
+        },
+        {
+          "id": "2609.37574",
+          "version": 2,
+          "categories": [
+            "cs.IR",
+            "cs.CL"
+          ]
+        },
+        {
+          "id": "2605.29307",
+          "version": 2,
+          "categories": [
+            "cs.IR",
+            "cs.LG",
+            "cs.AI",
+            "cs.CL"
+          ]
+        }
+      ]
+    }
+  },
+  "notice": "Only public paper metadata and official list fragments; no credentials, cookies, private files. Full raw source responses are gitignored in data/validation/arxiv; synthetic data explicitly labelled."
+}

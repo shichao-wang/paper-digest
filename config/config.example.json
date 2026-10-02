@@ -1,8 +1,19 @@
 {
   "database": {"path": "/data/digest.db"},
   "delivery": {"enabled": false},
-  "anthropic": {"api_key": "", "model": "claude-opus-5", "base_url": ""},
+  "anthropic": {"api_key": "", "model": "deepseek-flash", "base_url": "https://api.deepseek.com/v1"},
   "arxiv": {"lookback_days": 7},
+  "library": {
+    "collect_enabled": false,
+    "process_enabled": false,
+    "categories": ["cs.IR", "cs.LG", "cs.AI", "cs.CL", "stat.ML"],
+    "document_dir": "/data/library",
+    "concurrency": 1,
+    "poll_seconds": 900,
+    "max_requests": 120,
+    "max_tokens": 500000,
+    "task_timeout_seconds": 1800
+  },
   "topics": [
     {"id": "recommendation-advertising-search", "webhook_url": ""}
   ]

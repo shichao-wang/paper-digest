@@ -2,17 +2,17 @@ package digest
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
-	"github.com/anthropics/anthropic-sdk-go"
-	"github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/shichao-wang/paper-digest/internal/modelchat"
 	"github.com/shichao-wang/paper-digest/internal/papers"
 )
 
 const promptVersion = "arxiv-summary-v1"
-const defaultModel = "claude-opus-5"
+const defaultModel = "deepseek-flash"
 
 type Summary struct {
 	Text          string
@@ -24,14 +24,17 @@ type Analyzer interface {
 	Analyze(ctx context.Context, paper papers.Paper) (Summary, error)
 }
 
-type ClaudeAnalyzer struct {
+type DeepSeekAnalyzer struct {
 	Model   string
 	APIKey  string
 	BaseURL string
 	request func(context.Context, string, string, string, string) (string, error)
 }
 
-func (a ClaudeAnalyzer) Analyze(ctx context.Context, paper papers.Paper) (Summary, error) {
+// ClaudeAnalyzer 保留旧调用方的类型名；实际请求统一使用 Chat 协议。
+type ClaudeAnalyzer = DeepSeekAnalyzer
+
+func (a DeepSeekAnalyzer) Analyze(ctx context.Context, paper papers.Paper) (Summary, error) {
 	model := strings.TrimSpace(a.Model)
 	if model == "" {
 		model = defaultModel
@@ -39,7 +42,7 @@ func (a ClaudeAnalyzer) Analyze(ctx context.Context, paper papers.Paper) (Summar
 
 	request := a.request
 	if request == nil {
-		request = requestClaude
+		request = requestChat
 	}
 	text, err := request(ctx, a.APIKey, a.BaseURL, model, buildPrompt(paper))
 	if err != nil {
@@ -47,39 +50,32 @@ func (a ClaudeAnalyzer) Analyze(ctx context.Context, paper papers.Paper) (Summar
 	}
 	text = strings.TrimSpace(text)
 	if text == "" {
-		return Summary{}, fmt.Errorf("analyze arXiv paper %s: Claude returned an empty summary", paper.ID)
+		return Summary{}, fmt.Errorf("analyze arXiv paper %s: model returned an empty summary", paper.ID)
 	}
 	return Summary{Text: text, Model: model, PromptVersion: promptVersion}, nil
 }
 
-func newClaudeClient(apiKey, baseURL string, opts ...option.RequestOption) anthropic.Client {
-	options := []option.RequestOption{option.WithoutEnvironmentDefaults(), option.WithAPIKey(apiKey)}
-	if baseURL = strings.TrimSpace(baseURL); baseURL != "" {
-		options = append(options, option.WithBaseURL(baseURL))
+func requestChat(ctx context.Context, apiKey, baseURL, model, prompt string) (string, error) {
+	if baseURL = strings.TrimSpace(baseURL); baseURL == "" {
+		baseURL = "https://api.deepseek.com/v1"
 	}
-	return anthropic.NewClient(append(options, opts...)...)
-}
-
-func requestClaude(ctx context.Context, apiKey, baseURL, model, prompt string) (string, error) {
-	client := newClaudeClient(apiKey, baseURL)
-	response, err := client.Messages.New(ctx, anthropic.MessageNewParams{
-		Model:     model,
-		MaxTokens: 1200,
-		Messages: []anthropic.MessageParam{
-			anthropic.NewUserMessage(anthropic.NewTextBlock(prompt)),
-		},
+	client, err := modelchat.NewClient(modelchat.Options{
+		APIKey: apiKey, BaseURL: baseURL, Model: model,
+		Timeout: 90 * time.Second, Budget: modelchat.NewBudget(1),
 	})
 	if err != nil {
 		return "", err
 	}
-
-	var text strings.Builder
-	for _, block := range response.Content {
-		if block, ok := block.AsAny().(anthropic.TextBlock); ok {
-			text.WriteString(block.Text)
-		}
+	response, err := client.Chat(ctx, modelchat.Request{
+		Messages: []json.RawMessage{modelchat.Message("user", prompt)}, MaxTokens: 1200,
+	})
+	if err != nil {
+		return "", err
 	}
-	return text.String(), nil
+	if response.FinishReason != "stop" {
+		return "", fmt.Errorf("summary chat did not finish successfully")
+	}
+	return response.Content, nil
 }
 
 func buildPrompt(paper papers.Paper) string {

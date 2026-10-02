@@ -1,0 +1,6 @@
+# PDF 的交叉引用表包含固定宽度空格，按二进制处理。
+*.pdf binary
+
+# 来源样例保留原响应中的行尾空格。
+testdata/validation/arxiv/real-cs.IR-list-extract.html whitespace=-blank-at-eol
+testdata/validation/arxiv/real-entries.xml whitespace=-blank-at-eol

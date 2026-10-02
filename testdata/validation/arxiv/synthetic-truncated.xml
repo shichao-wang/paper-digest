@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+<!-- SYNTHETIC TRUNCATED FIXTURE: deliberate malformed XML, not an observed outage -->
+<entry><id>oai:arXiv.org:2609.38353v1</id>

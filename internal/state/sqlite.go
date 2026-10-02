@@ -106,6 +106,10 @@ func (s *Store) initialize(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, "PRAGMA foreign_keys = ON"); err != nil {
 		return fmt.Errorf("enable sqlite foreign keys: %w", err)
 	}
+	// 必须在创建任何新表之前为旧日报库留下可恢复的独立快照。
+	if err := s.backupLegacyLibrary(ctx); err != nil {
+		return err
+	}
 	const schema = `
 CREATE TABLE IF NOT EXISTS jobs (
 	topic TEXT NOT NULL,
@@ -147,7 +151,7 @@ CREATE INDEX IF NOT EXISTS jobs_pending
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("initialize sqlite schema: %w", err)
 	}
-	return nil
+	return s.migrateLibrary(ctx)
 }
 
 // RecoverInterruptedSends 仅在启用的 worker 启动时调用一次，读取操作不调用。

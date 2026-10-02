@@ -5,7 +5,11 @@ export function useLocation() {
   useEffect(() => {
     const update = () => setSearch(window.location.search)
     window.addEventListener('popstate', update)
-    return () => window.removeEventListener('popstate', update)
+    window.addEventListener('app-location-change', update)
+    return () => {
+      window.removeEventListener('popstate', update)
+      window.removeEventListener('app-location-change', update)
+    }
   }, [])
   const navigate = useCallback((updates: Record<string, string | null>) => {
     const params = new URLSearchParams(window.location.search)
@@ -16,6 +20,7 @@ export function useLocation() {
     const query = params.toString()
     window.history.pushState(null, '', `${window.location.pathname}${query ? `?${query}` : ''}`)
     setSearch(window.location.search)
+    window.dispatchEvent(new Event('app-location-change'))
   }, [])
   return { params: new URLSearchParams(search), navigate }
 }

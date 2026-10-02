@@ -83,6 +83,22 @@ func TestWebhookRequiresValidHTTPSWithoutEchoingSecret(t *testing.T) {
 	}
 }
 
+func TestLibraryDefaultsAndIndependentSwitches(t *testing.T) {
+	cfg, err := loadFixture(t, `{"database":{"path":"data/digest.db"},"library":{"collect_enabled":true,"process_enabled":true},"arxiv":{"lookback_days":7},"topics":[{"id":"recommendation-advertising-search"}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Delivery.Enabled || !cfg.Library.CollectEnabled || !cfg.Library.ProcessEnabled || cfg.Library.DocumentDir != filepath.Join("data", "library") || len(cfg.Library.Categories) != 5 || cfg.Library.Concurrency != 1 || cfg.Library.MaxRequests != 120 || cfg.Library.MaxTokens != 500000 {
+		t.Fatalf("library defaults: %+v", cfg.Library)
+	}
+	for _, fields := range []string{`"concurrency":9`, `"concurrency":-1`, `"poll_seconds":5`, `"max_requests":-1`, `"max_tokens":10`, `"task_timeout_seconds":10`, `"categories":["cs.IR","cs.IR"]`, `"categories":["../../secret"]`, `"document_dir":" "`} {
+		_, err := loadFixture(t, `{"library":{`+fields+`},"arxiv":{"lookback_days":7},"topics":[{"id":"recommendation-advertising-search"}]}`)
+		if err == nil || strings.Contains(err.Error(), "secret") {
+			t.Fatalf("invalid library accepted/leaked: %s %v", fields, err)
+		}
+	}
+}
+
 func TestDeliveryRequiresFileCredentialsOnlyWhenEnabled(t *testing.T) {
 	cfg, err := loadFixture(t, `{"arxiv":{"lookback_days":7},"topics":[{"id":"recommendation-advertising-search","webhook_url":""}]}`)
 	if err != nil {

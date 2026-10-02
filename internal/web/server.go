@@ -13,12 +13,21 @@ import (
 	"strings"
 	"time"
 
+	"github.com/shichao-wang/paper-digest/internal/document"
 	"github.com/shichao-wang/paper-digest/internal/job"
+	"github.com/shichao-wang/paper-digest/internal/library"
 	"github.com/shichao-wang/paper-digest/internal/state"
 )
 
 // New 使用共享 Store 与静态资源目录；调用方管理生命周期，创建 handler 不打开数据库。
 func New(store *state.Store, staticFS fs.FS) (http.Handler, error) {
+	return NewWithDocuments(store, staticFS, nil)
+}
+
+// NewWithDocuments 为生产服务注入文档仓库，证据读取会核对磁盘文件、hash 和持久化文档。
+// repository 为 nil 时保持 New 的兼容行为，仅核对 SQLite 中的 page/block 内容。
+// 两种构造方式都只读取已有文档，不下载、提取或启动模型。
+func NewWithDocuments(store *state.Store, staticFS fs.FS, repository *document.Repository) (http.Handler, error) {
 	if store == nil || staticFS == nil {
 		return nil, errors.New("web: store and static filesystem are required")
 	}
@@ -30,14 +39,15 @@ func New(store *state.Store, staticFS fs.FS) (http.Handler, error) {
 	if err != nil {
 		return nil, fmt.Errorf("web: read static index.html: %w", err)
 	}
-	s := &server{store: store, staticFS: staticFS, files: http.FileServer(http.FS(staticFS))}
+	s := &server{store: store, staticFS: staticFS, files: http.FileServer(http.FS(staticFS)), documents: repository}
 	return http.HandlerFunc(s.serveHTTP), nil
 }
 
 type server struct {
-	store    *state.Store
-	staticFS fs.FS
-	files    http.Handler
+	store     *state.Store
+	staticFS  fs.FS
+	files     http.Handler
+	documents *document.Repository
 }
 
 func (s *server) serveHTTP(w http.ResponseWriter, r *http.Request) {
@@ -131,6 +141,35 @@ func (s *server) api(w http.ResponseWriter, r *http.Request) {
 				Status string `json:"status"`
 			}{"ok"}
 		}
+	case "/api/library/papers":
+		var page state.PageQuery
+		page, err = pagination(r.URL.Query())
+		if err == nil {
+			query := r.URL.Query()
+			var result library.ResultPage
+			result, err = s.store.BrowseLibrary(r.Context(), library.Query{
+				Page: page.Page, PageSize: page.PageSize, Q: query.Get("q"),
+				Batch: query.Get("batch"), Topic: query.Get("topic"),
+				Relevance: query.Get("relevance"), Status: query.Get("status"),
+			})
+			if err == nil {
+				value = libraryPageDTO(result)
+			}
+		}
+	case "/api/library/papers/detail":
+		var id library.Identity
+		id, err = libraryIdentity(r.URL.Query())
+		if err == nil {
+			var detail library.Detail
+			detail, err = s.store.LibraryDetail(r.Context(), id)
+			if err == nil {
+				value = libraryDetailDTO(detail)
+			}
+		}
+	case "/api/library/status":
+		value, err = s.store.LibraryStatus(r.Context())
+	case "/api/library/evidence":
+		value, err = s.libraryEvidence(r.Context(), r.URL.Query())
 	case "/api/papers":
 		var page state.PageQuery
 		page, err = pagination(r.URL.Query())
@@ -155,9 +194,9 @@ func (s *server) api(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		switch {
-		case errors.Is(err, state.ErrInvalidQuery):
+		case errors.Is(err, state.ErrInvalidQuery), errors.Is(err, library.ErrInvalid):
 			writeError(w, http.StatusBadRequest, "invalid query parameters")
-		case errors.Is(err, state.ErrJobNotFound), errors.Is(err, state.ErrPaperNotFound):
+		case errors.Is(err, state.ErrJobNotFound), errors.Is(err, state.ErrPaperNotFound), errors.Is(err, library.ErrNotFound):
 			writeError(w, http.StatusNotFound, "not found")
 		default:
 			writeError(w, http.StatusServiceUnavailable, "service unavailable")

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+<!-- SYNTHETIC EMPTY FIXTURE: not an observed empty arXiv batch -->
+<id>urn:synthetic:empty</id><title>Synthetic empty</title><updated>2026-10-01T00:00:00Z</updated>
+</feed>

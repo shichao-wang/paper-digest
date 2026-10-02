@@ -13,7 +13,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /paper-digest ./cmd/paper-digest
 
 FROM alpine:3.22
-RUN apk add --no-cache ca-certificates tzdata && addgroup -S app && adduser -S -G app app && mkdir -p /data && chown app:app /data
+RUN apk add --no-cache ca-certificates tzdata poppler-utils && addgroup -S app && adduser -S -G app app && mkdir -p /data && chown app:app /data
 USER app
 WORKDIR /app
 COPY --from=build /paper-digest /usr/local/bin/paper-digest

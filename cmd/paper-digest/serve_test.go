@@ -50,6 +50,10 @@ func serveConfig(path string, enabled bool) config.Config {
 	cfg.Arxiv.LookbackDays = 7
 	cfg.Anthropic.APIKey = "fixture-key"
 	cfg.Topics = []config.Topic{{ID: job.Topic, WebhookURL: "https://example.invalid/fixture"}}
+	cfg.Library = config.Library{
+		Categories: []string{"cs.IR"}, DocumentDir: filepath.Join(filepath.Dir(path), "documents"),
+		Concurrency: 1, PollSeconds: 60, MaxRequests: 20, MaxTokens: 4096, TaskTimeoutSeconds: 60,
+	}
 	return cfg
 }
 

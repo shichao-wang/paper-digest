@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+<!-- REAL PUBLIC ENTRY EXTRACTS: combined sample wrapper; NOT a complete official batch. Entries unchanged. -->
+  <id>urn:validation:public-extract</id>
+  <title>Public arXiv validation entry extracts</title>
+  <updated>2026-10-01T04:00:07.369047+00:00</updated>
+  <entry>
+    <id>oai:arXiv.org:2609.38353v1</id>
+    <title>TAGGRAPH: Tag-Augmented Graphs for Graph Retrieval of Agent Persistent Histories</title>
+    <updated>2026-10-01T04:00:07.369129+00:00</updated>
+    <link href="https://arxiv.org/abs/2609.38353" rel="alternate" type="text/html"/>
+    <summary>arXiv:2609.38353v1 Announce Type: new 
+Abstract: Long-term memory lets LLM agents recall past interactions and remain consistent across sessions, but memory systems are hard to compare because they often vary in representation, indexing, retrieval, and evaluation. We present a controlled evaluation framework based on shared 5W-style conversational memories. Localized graph configurations traverse a common base graph; AdaptiveGraph adds chronological edges and Personalized PageRank diffusion. We also evaluate BM25 over the same extracted notes and OpenClaw as a raw-input external reference. Retrieval rankings vary across memory settings. On LongMemEval-S, AdaptiveGraph is the strongest graph configuration at 0.844 MRR, but BM25 reaches 0.867 and OpenClaw 0.880. On ATANT Core, localized graph traversal outperforms diffusion and BM25, whereas BM25 leads the stress rounds. Reducing LongMemEval-S within the tested range does not reproduce the ATANT diffusion penalty, but the smallest tested store remains larger than ATANT Core, so store size cannot be ruled out. The penalty also persists under a permissive content-match criterion. Vocabulary normalization and extraction quality substantially affect graph retrieval, and missing extraction tags are common among top-five misses. Retrieval strategies should therefore be evaluated jointly with the memory setting and against strong lexical baselines.</summary>
+    <category term="cs.IR"/>
+    <category term="cs.AI"/>
+    <published>2026-10-01T00:00:00-04:00</published>
+    <arxiv:announce_type>new</arxiv:announce_type>
+    <dc:rights>http://creativecommons.org/licenses/by/4.0/</dc:rights>
+    <dc:creator>Yu-Su Chen, Yu-Jung Liang, Pengtao Xie</dc:creator>
+  </entry>
+  <entry>
+    <id>oai:arXiv.org:2602.19001v2</id>
+    <title>Life-Bench: A Benchmark and Knowledge Graph Framework for Multimodal Personalization Beyond Concept Recognition</title>
+    <updated>2026-10-01T04:00:07.370174+00:00</updated>
+    <link href="https://arxiv.org/abs/2602.19001" rel="alternate" type="text/html"/>
+    <summary>arXiv:2602.19001v2 Announce Type: cross 
+Abstract: As large language models increasingly power personal assistants, users expect them to reason over multimodal life histories, from recognizing people to understanding events to aggregating patterns, yet existing benchmarks primarily target concept-level recognition. We introduce Life-Bench, a fully synthetic, human-verified multimodal benchmark of over 11,800 question-answer pairs across 10 tasks, organized by required evidence scope: concept identification, event understanding, and aggregated reasoning. The benchmark's photo-centric personal histories are distributionally aligned with real user accounts under embedding statistic. The interconnected structure of personal data invites graph-based solutions; we propose LifeGraph, a personal knowledge graph framework providing structured retrieval with on-demand access to source visual evidence, showing particular promise on event and aggregated tasks. Systematic evaluation of four retrieval paradigms on Life-Bench demonstrates that accuracy degrades sharply with evidence scope, falling below 0.40 on aggregated tasks, and that no single paradigm dominates across categories. Performance beyond concept recognition remains modest for all evaluated methods, establishing personalization over multimodal histories as an open challenge and Life-Bench as a testbed for future progress.</summary>
+    <category term="cs.CV"/>
+    <category term="cs.AI"/>
+    <category term="cs.CL"/>
+    <category term="cs.IR"/>
+    <published>2026-10-01T00:00:00-04:00</published>
+    <arxiv:announce_type>cross</arxiv:announce_type>
+    <dc:rights>http://creativecommons.org/licenses/by-sa/4.0/</dc:rights>
+    <dc:creator>Xia Hu, Honglei Zhuang, Brian Potetz, Alireza Fathi, Bo Hu, Babak Samari, Howard Zhou</dc:creator>
+  </entry>
+  <entry>
+    <id>oai:arXiv.org:2603.02561v2</id>
+    <title>SOLAR: SVD-Optimized Lifelong Attention for Recommendation</title>
+    <updated>2026-10-01T04:00:07.371215+00:00</updated>
+    <link href="https://arxiv.org/abs/2603.02561" rel="alternate" type="text/html"/>
+    <summary>arXiv:2603.02561v2 Announce Type: replace 
+Abstract: Attention mechanism remains the defining operator in Transformers since it provides expressive global credit assignment, yet its quadratic cost in sequence length N makes long-context modeling expensive and often forces truncation or other heuristics. Linear attention reduces complexity to O(Nd^2) by reordering computation through kernel feature maps, but this reformulation drops the softmax mechanism and shifts the attention score distribution. Lifelong recommendation requires efficient attention as well, for large-scale sequence modeling with user histories and candidate items under tight latency and resource constraints. We introduce SVD-Attention, a novel attention mechanism, and SOLAR, a set-aware framework built on it for lifelong recommendation. SVD-Attention factorizes low-rank embeddings into r principal components, computes candidate-to-interest scores in compact space, and applies softmax over those scores. Its bilinear reduction is exact on the rank-r reconstruction, while the normalized output approximates token-level softmax with an explicitly bounded residual. The resulting computation reduces the cost from O(N^2d) to O(Ndr), and supports 12,000 behaviors and 3,000 candidates per request without filtering. SOLAR achieves the best among compared methods on RecFlow and MIND, delivers 0.8531 AUC at approximately 19ms 95th-percentile latency in an industrial evaluation, and yields business gains with a 0.68% relative lift in Video Views in the real-world online A/B test. Following this evaluation, SOLAR has been fully deployed in Kuaishou's production recommendation system.</summary>
+    <category term="cs.IR"/>
+    <category term="cs.CV"/>
+    <category term="cs.LG"/>
+    <published>2026-10-01T00:00:00-04:00</published>
+    <arxiv:announce_type>replace</arxiv:announce_type>
+    <dc:rights>http://arxiv.org/licenses/nonexclusive-distrib/1.0/</dc:rights>
+    <dc:creator>Chenghao Zhang, Chao Feng, Yuanhao Pu, Xunyong Yang, Wenhui Yu, Xiang Li, Chunjie Chen, Kaiqiao Zhan</dc:creator>
+  </entry>
+  <entry>
+    <id>oai:arXiv.org:2605.29307v2</id>
+    <title>GrepSeek: Training Search Agents for Direct Corpus Interaction</title>
+    <updated>2026-10-01T04:00:07.371708+00:00</updated>
+    <link href="https://arxiv.org/abs/2605.29307" rel="alternate" type="text/html"/>
+    <summary>arXiv:2605.29307v2 Announce Type: replace-cross 
+Abstract: Large Language Model (LLM) search agents have shown strong promise on knowledge-intensive tasks through iterative reasoning and retrieval. Most existing systems rely on retrievers that return ranked documents from a pre-built index. We explore a complementary paradigm in which the agent treats the corpus as the search environment and finds evidence through executable shell commands. We introduce GrepSeek, an optimized direct corpus interaction (DCI) agent that learns to find, filter, and compose evidence over large text corpora. To stabilize reinforcement learning (RL) over large corpora, we train in two stages: first, we initialize the policy using verified, causally grounded search trajectories generated by an answer-aware Tutor and an answer-blind Planner; then, we refine the policy using Group Relative Policy Optimization (GRPO). To make DCI practical at scale, we introduce two semantics-preserving execution optimizations: Pruned Adaptive Command Execution, which reduces shell-based search latency by up to $77\times$ on a 14GB corpus with 21 million documents using a compact auxiliary structure, and Sharded-Parallel Corpus Search, which achieves up to $7.6\times$ speedup without additional preprocessing; both preserve equivalence with sequential execution. Across eight open-domain QA benchmarks, GrepSeek achieves the strongest overall performance, with a statistically significant relative improvement of $5.7\%$ over the best baseline. Our analysis shows how DCI-optimized agents conduct flexible and effective compositional search through direct corpus interaction.</summary>
+    <category term="cs.CL"/>
+    <category term="cs.AI"/>
+    <category term="cs.IR"/>
+    <category term="cs.LG"/>
+    <published>2026-10-01T00:00:00-04:00</published>
+    <arxiv:announce_type>replace-cross</arxiv:announce_type>
+    <dc:rights>http://creativecommons.org/licenses/by/4.0/</dc:rights>
+    <dc:creator>Alireza Salemi, Chang Zeng, Atharva Nijasure, Jui-Hui Chung, Razieh Rahimi, Fernando Diaz, Hamed Zamani</dc:creator>
+  </entry>
+  <entry>
+    <id>oai:arXiv.org:2609.38353v1</id>
+    <title>TAGGRAPH: Tag-Augmented Graphs for Graph Retrieval of Agent Persistent Histories</title>
+    <updated>2026-10-01T04:00:24.065805+00:00</updated>
+    <link href="https://arxiv.org/abs/2609.38353" rel="alternate" type="text/html"/>
+    <summary>arXiv:2609.38353v1 Announce Type: cross 
+Abstract: Long-term memory lets LLM agents recall past interactions and remain consistent across sessions, but memory systems are hard to compare because they often vary in representation, indexing, retrieval, and evaluation. We present a controlled evaluation framework based on shared 5W-style conversational memories. Localized graph configurations traverse a common base graph; AdaptiveGraph adds chronological edges and Personalized PageRank diffusion. We also evaluate BM25 over the same extracted notes and OpenClaw as a raw-input external reference. Retrieval rankings vary across memory settings. On LongMemEval-S, AdaptiveGraph is the strongest graph configuration at 0.844 MRR, but BM25 reaches 0.867 and OpenClaw 0.880. On ATANT Core, localized graph traversal outperforms diffusion and BM25, whereas BM25 leads the stress rounds. Reducing LongMemEval-S within the tested range does not reproduce the ATANT diffusion penalty, but the smallest tested store remains larger than ATANT Core, so store size cannot be ruled out. The penalty also persists under a permissive content-match criterion. Vocabulary normalization and extraction quality substantially affect graph retrieval, and missing extraction tags are common among top-five misses. Retrieval strategies should therefore be evaluated jointly with the memory setting and against strong lexical baselines.</summary>
+    <category term="cs.IR"/>
+    <category term="cs.AI"/>
+    <published>2026-10-01T00:00:00-04:00</published>
+    <arxiv:announce_type>cross</arxiv:announce_type>
+    <dc:rights>http://creativecommons.org/licenses/by/4.0/</dc:rights>
+    <dc:creator>Yu-Su Chen, Yu-Jung Liang, Pengtao Xie</dc:creator>
+  </entry>
+</feed>

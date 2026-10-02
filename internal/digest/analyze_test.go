@@ -10,11 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/shichao-wang/paper-digest/internal/papers"
 )
 
-func TestClaudeAnalyzerUsesConfiguredModelAndTraceablePrompt(t *testing.T) {
+func TestDeepSeekAnalyzerUsesConfiguredModelAndTraceablePrompt(t *testing.T) {
 	published := time.Date(2026, time.September, 26, 10, 0, 0, 0, time.UTC)
 	paper := papers.Paper{
 		ID:        "arxiv:2609.12345",
@@ -77,49 +76,85 @@ func TestClaudeAnalyzerDefaultsModelAndRejectsEmptyResult(t *testing.T) {
 	}
 }
 
-func TestClaudeClientUsesFileKeyInsteadOfEnvironment(t *testing.T) {
+func TestChatUsesFileSettingsInsteadOfEnvironment(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "environment-key")
 	t.Setenv("ANTHROPIC_BASE_URL", "http://127.0.0.1:1")
+	t.Setenv("OPENAI_API_KEY", "environment-key")
+	t.Setenv("OPENAI_BASE_URL", "http://127.0.0.1:1")
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
-		if r.Header.Get("X-Api-Key") != "file-key" {
-			t.Errorf("SDK 未使用配置中的密钥")
+		if r.Header.Get("Authorization") != "Bearer file-key" {
+			t.Errorf("未使用配置中的密钥")
 		}
-		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte(`{"type":"error","error":{"type":"invalid_request_error","message":"test"}}`))
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":{"message":"file-key must not leak"}}`))
 	}))
 	defer server.Close()
-	client := newClaudeClient("file-key", server.URL)
-	_, _ = client.Messages.New(context.Background(), anthropic.MessageNewParams{
-		Model: "claude-test-model", MaxTokens: 1,
-		Messages: []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock("test"))},
-	})
-	if calls != 1 {
-		t.Fatalf("应向本地测试服务发送一次请求，实际 %d 次", calls)
+	_, err := requestChat(context.Background(), "file-key", server.URL, "deepseek-flash", "测试")
+	if err == nil || strings.Contains(err.Error(), "file-key") || calls != 1 {
+		t.Fatalf("错误应脱敏且不重试: err=%v, calls=%d", err, calls)
 	}
 }
 
-func TestRequestClaudeRoutesToConfiguredGateway(t *testing.T) {
+func TestRequestChatRoutesToConfiguredGateway(t *testing.T) {
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
-		if r.Method != http.MethodPost || r.URL.Path != "/v1/messages" || r.Header.Get("X-Api-Key") != "file-key" {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/chat/completions" || r.Header.Get("Authorization") != "Bearer file-key" {
 			t.Error("模型请求路径或认证不符合预期")
 		}
 		var body struct {
-			Model string `json:"model"`
+			Model    string `json:"model"`
+			Thinking struct {
+				Type string `json:"type"`
+			} `json:"thinking"`
+			MaxTokens int                              `json:"max_tokens"`
+			Stream    bool                             `json:"stream"`
+			Messages  []struct{ Role, Content string } `json:"messages"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Model != "group/deepseek-v4-1-flash" {
-			t.Error("模型请求未使用指定模型")
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Model != "deepseek-flash" || body.Thinking.Type != "disabled" || body.Stream || body.MaxTokens != 1200 || len(body.Messages) != 1 || body.Messages[0].Content != "测试" {
+			t.Error("模型请求体不符合预期")
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"msg_test","type":"message","role":"assistant","model":"group/deepseek-v4-1-flash","content":[{"type":"text","text":"测试摘要"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"测试摘要"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
 	}))
 	defer server.Close()
-	text, err := requestClaude(context.Background(), "file-key", server.URL, "group/deepseek-v4-1-flash", "测试")
+	text, err := requestChat(context.Background(), "file-key", server.URL+"/v1", "deepseek-flash", "测试")
 	if err != nil || text != "测试摘要" || calls != 1 {
-		t.Fatalf("网关调用失败: text=%q, err=%v, calls=%d", text, err, calls)
+		t.Fatalf("Chat 调用失败: text=%q, err=%v, calls=%d", text, err, calls)
+	}
+}
+
+func TestRequestChatRejectsUnfinishedResponses(t *testing.T) {
+	for name, response := range map[string]string{
+		"length":     `{"choices":[{"message":{"role":"assistant","content":"不完整摘要"},"finish_reason":"length"}]}`,
+		"tool_calls": `{"choices":[{"message":{"role":"assistant","content":"摘要","tool_calls":[{"id":"a","type":"function","function":{"name":"read","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`,
+		"refusal":    `{"choices":[{"message":{"role":"assistant","content":"摘要","refusal":"refused"},"finish_reason":"stop"}]}`,
+		"empty":      `{"choices":[{"message":{"role":"assistant","content":" "},"finish_reason":"stop"}]}`,
+		"no_choices": `{"choices":[]}`,
+		"bad_json":   `{`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(response))
+			}))
+			defer server.Close()
+			if _, err := requestChat(context.Background(), "file-key", server.URL, "deepseek-flash", "测试"); err == nil {
+				t.Fatal("未完成的响应被接受")
+			}
+		})
+	}
+}
+
+func TestRequestChatHonorsCanceledContext(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++ }))
+	defer server.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := requestChat(ctx, "file-key", server.URL, "deepseek-flash", "测试"); err == nil || calls != 0 {
+		t.Fatalf("已取消的请求应停止: err=%v, calls=%d", err, calls)
 	}
 }
 
