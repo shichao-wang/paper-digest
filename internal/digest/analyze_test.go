@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/shichao-wang/paper-digest/internal/modelchat"
 	"github.com/shichao-wang/paper-digest/internal/papers"
 )
 
@@ -73,6 +75,65 @@ func TestClaudeAnalyzerDefaultsModelAndRejectsEmptyResult(t *testing.T) {
 	}
 	if _, err := analyzer.Analyze(context.Background(), papers.Paper{ID: "2609.12345"}); err == nil || !strings.Contains(err.Error(), "empty summary") {
 		t.Fatalf("Analyze() error = %v, want empty-summary error", err)
+	}
+}
+
+type digestRoutingTransport func(*http.Request) (*http.Response, error)
+
+func (f digestRoutingTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestLegacyDigestSettingsRejectedBeforeHTTP(t *testing.T) {
+	// 截获默认 transport，防止回归测试意外访问真实服务或发送凭据。
+	original := http.DefaultTransport
+	calls := 0
+	http.DefaultTransport = digestRoutingTransport(func(*http.Request) (*http.Response, error) {
+		calls++
+		return nil, errors.New("unexpected HTTP request")
+	})
+	t.Cleanup(func() { http.DefaultTransport = original })
+	for _, test := range []struct {
+		name, key, model, base string
+	}{
+		{"old_sample", "sk-ant-synthetic-only", "claude-opus-5", ""},
+		{"opaque_legacy_key", "opaque-synthetic-only", "claude-opus-5", " \n"},
+		{"model_changed_without_key", "sk-ant-synthetic-only", "deepseek-flash", ""},
+		{"model_defaulted_without_key", "sk-ant-synthetic-only", "", ""},
+		{"explicit_official_without_migration", "opaque-synthetic-only", "claude-opus-5", "https://api.deepseek.com/v1"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			analyzer := ClaudeAnalyzer{APIKey: test.key, Model: test.model, BaseURL: test.base}
+			_, err := analyzer.Analyze(context.Background(), papers.Paper{ID: "arxiv:2609.12345"})
+			if !errors.Is(err, modelchat.ErrMigrationRequired) || calls != 0 {
+				t.Fatalf("legacy digest settings sent HTTP: err=%v calls=%d", err, calls)
+			}
+			if strings.Contains(err.Error(), test.key) {
+				t.Fatal("migration error exposed key")
+			}
+		})
+	}
+}
+
+func TestDigestDeepSeekDefaultsUseChat(t *testing.T) {
+	original := http.DefaultTransport
+	calls := 0
+	http.DefaultTransport = digestRoutingTransport(func(r *http.Request) (*http.Response, error) {
+		calls++
+		if r.URL.String() != "https://api.deepseek.com/v1/chat/completions" || r.Header.Get("Authorization") != "Bearer synthetic-deepseek-key" {
+			t.Error("default digest routing is incorrect")
+		}
+		var wire struct {
+			Model string `json:"model"`
+		}
+		if json.NewDecoder(r.Body).Decode(&wire) != nil || wire.Model != "deepseek-flash" {
+			t.Error("default digest model is incorrect")
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"choices":[{"message":{"role":"assistant","content":"synthetic summary"},"finish_reason":"stop"}]}`))}, nil
+	})
+	t.Cleanup(func() { http.DefaultTransport = original })
+	analyzer := DeepSeekAnalyzer{APIKey: "synthetic-deepseek-key"}
+	summary, err := analyzer.Analyze(context.Background(), papers.Paper{ID: "arxiv:2609.12345"})
+	if err != nil || calls != 1 || summary.Model != "deepseek-flash" || summary.Text != "synthetic summary" {
+		t.Fatalf("valid DeepSeek defaults failed: summary=%+v err=%v calls=%d", summary, err, calls)
 	}
 }
 

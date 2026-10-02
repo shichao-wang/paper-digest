@@ -220,7 +220,38 @@ func (s *Store) SaveCategoryBatch(ctx context.Context, b library.CategoryBatch) 
 	return tx.Commit()
 }
 
-// SaveSourceObservation 保存公告日期未核实的采集快照和候选，不创建公告或日期；相同采集幂等。
+// sourceObservationID 按响应 hash 和采集内容去重，排除本地抓取时间与存储位置。
+// 只规范化计算身份的副本；实际快照仍保存完整 artifact 依赖及首次抓取时间。
+func sourceObservationID(b library.CategoryBatch) (string, error) {
+	stableArtifacts := func(artifacts []library.Artifact) []library.Artifact {
+		if artifacts == nil {
+			return nil
+		}
+		stable := append([]library.Artifact{}, artifacts...)
+		for i := range stable {
+			stable[i].CapturedAt = ""
+			if stable[i].SHA256 != "" {
+				stable[i].Path = ""
+			}
+		}
+		return stable
+	}
+	b.CapturedAt = ""
+	b.Artifacts = stableArtifacts(b.Artifacts)
+	b.Versions = append([]library.Version(nil), b.Versions...)
+	for i := range b.Versions {
+		b.Versions[i].CapturedAt = ""
+		b.Versions[i].MetadataArtifacts = stableArtifacts(b.Versions[i].MetadataArtifacts)
+	}
+	raw, err := json.Marshal(b)
+	if err != nil {
+		return "", err
+	}
+	hash := sha256.Sum256(raw)
+	return hex.EncodeToString(hash[:]), nil
+}
+
+// SaveSourceObservation 保存公告日期未核实的采集快照和候选，不创建公告或日期；相同响应内容幂等。
 func (s *Store) SaveSourceObservation(ctx context.Context, b library.CategoryBatch) error {
 	if strings.TrimSpace(b.Category) == "" || b.Date != "" {
 		return library.ErrInvalid
@@ -230,13 +261,16 @@ func (s *Store) SaveSourceObservation(ctx context.Context, b library.CategoryBat
 	if err != nil {
 		return err
 	}
-	hash := sha256.Sum256(raw)
+	id, err := sourceObservationID(b)
+	if err != nil {
+		return err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `INSERT INTO library_source_observations(id,category,captured_at,data) VALUES(?,?,?,?) ON CONFLICT DO NOTHING`, hex.EncodeToString(hash[:]), b.Category, b.CapturedAt, raw); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO library_source_observations(id,category,captured_at,data) VALUES(?,?,?,?) ON CONFLICT DO NOTHING`, id, b.Category, b.CapturedAt, raw); err != nil {
 		return err
 	}
 	for _, v := range b.Versions {

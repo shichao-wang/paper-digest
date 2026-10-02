@@ -66,6 +66,14 @@ func Backup(ctx context.Context, store *state.Store, artifactRoot, targetDir str
 			return err
 		}
 		src, err := openRoot(artifactRoot)
+		// A fresh or legacy-only store may not have created its artifact directory.
+		// Use an empty staging root only when the snapshot has no file dependencies.
+		if errors.Is(err, os.ErrNotExist) && len(refs.artifacts) == 0 && len(refs.documents) == 0 {
+			if err := dst.MkdirAll("artifacts", 0700); err != nil {
+				return err
+			}
+			src, err = dst.OpenRoot("artifacts")
+		}
 		if err != nil {
 			return fmt.Errorf("archive: artifact root: %w", err)
 		}

@@ -253,14 +253,95 @@ func TestBudgetAndUnfinishedToolStage(t *testing.T) {
 		t.Fatalf("budget exceeded: %v %d", err, calls)
 	}
 }
+
+type routingTransport func(*http.Request) (*http.Response, error)
+
+func (f routingTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestLegacySettingsRejectedBeforeHTTP(t *testing.T) {
+	for _, test := range []struct {
+		name, base, model, key string
+	}{
+		{"old_sample", "", "claude-opus-5", "sk-ant-synthetic-only"},
+		{"opaque_legacy_key", "", "claude-opus-5", "opaque-synthetic-only"},
+		{"whitespace_base", " \n\t", " claude-opus-5 ", "opaque-synthetic-only"},
+		{"unspecified_provider", "", "custom-model", "opaque-synthetic-only"},
+		{"caller_defaulted_base", "https://api.deepseek.com/v1", "claude-opus-5", "opaque-synthetic-only"},
+		{"changed_model_only", "", "deepseek-flash", "sk-ant-synthetic-only"},
+		{"official_explicit", "https://api.deepseek.com/v1", "deepseek-flash", "sk-ant-synthetic-only"},
+		{"official_anthropic_alias", "https://api.deepseek.com/anthropic", "deepseek-flash", "sk-ant-synthetic-only"},
+		{"official_case_and_port", "https://API.DEEPSEEK.COM:443/v1", "deepseek-flash", "sk-ant-synthetic-only"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			calls := 0
+			budget := NewBudget(1)
+			client, err := NewClient(Options{APIKey: test.key, BaseURL: test.base, Model: test.model, Budget: budget,
+				HTTPClient: &http.Client{Transport: routingTransport(func(*http.Request) (*http.Response, error) {
+					calls++
+					return nil, errors.New("unexpected HTTP request")
+				})},
+			})
+			if err == nil {
+				_, err = client.Chat(context.Background(), Request{Messages: []json.RawMessage{Message("user", "synthetic")}})
+			}
+			if !errors.Is(err, ErrMigrationRequired) || client != nil || calls != 0 || budget.Used() != 0 {
+				t.Fatalf("legacy routing was not rejected before HTTP: err=%v calls=%d budget=%d", err, calls, budget.Used())
+			}
+			if strings.Contains(err.Error(), test.key) || strings.Contains(err.Error(), test.model) || strings.Contains(err.Error(), "api.deepseek.com") {
+				t.Fatal("migration error exposed configured values")
+			}
+		})
+	}
+}
+
+func TestDeepSeekDefaultAndExplicitCompatibleChatRouting(t *testing.T) {
+	for _, test := range []struct {
+		name, base, model, key, endpoint string
+	}{
+		{"official_default", "", "deepseek-flash", "synthetic-deepseek-key", "https://api.deepseek.com/v1/chat/completions"},
+		{"official_whitespace_default", " \n", " deepseek-flash ", "synthetic-deepseek-key", "https://api.deepseek.com/v1/chat/completions"},
+		{"official_model_alias", "", "deepseek-v4-1-flash", "synthetic-deepseek-key", "https://api.deepseek.com/v1/chat/completions"},
+		{"official_anthropic_alias", "https://api.deepseek.com/anthropic", "deepseek-flash", "synthetic-deepseek-key", "https://api.deepseek.com/v1/chat/completions"},
+		{"custom_root", "https://gateway.example", "claude-opus-5", "sk-ant-synthetic-only", "https://gateway.example/v1/chat/completions"},
+		{"custom_v1", "https://gateway.example/v1/", "group/deepseek-v4-1-flash", "opaque-synthetic-only", "https://gateway.example/v1/chat/completions"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			calls := 0
+			budget := NewBudget(1)
+			client, err := NewClient(Options{APIKey: test.key, BaseURL: test.base, Model: test.model, Budget: budget,
+				HTTPClient: &http.Client{Transport: routingTransport(func(r *http.Request) (*http.Response, error) {
+					calls++
+					if r.URL.String() != test.endpoint || r.Header.Get("Authorization") != "Bearer "+test.key {
+						t.Error("request routed outside configured Chat endpoint")
+					}
+					var wire struct {
+						Model string `json:"model"`
+					}
+					if json.NewDecoder(r.Body).Decode(&wire) != nil || wire.Model != strings.TrimSpace(test.model) {
+						t.Error("configured model was not retained")
+					}
+					return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"choices":[{"message":{"role":"assistant","content":"synthetic response"},"finish_reason":"stop"}]}`))}, nil
+				})},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			response, err := client.Chat(context.Background(), Request{Messages: []json.RawMessage{Message("user", "synthetic")}})
+			if err != nil || calls != 1 || budget.Used() != 1 || response.Content != "synthetic response" {
+				t.Fatalf("valid Chat routing failed: err=%v calls=%d budget=%d", err, calls, budget.Used())
+			}
+		})
+	}
+}
+
 func TestBaseURLRules(t *testing.T) {
 	for _, base := range []string{"https://old-gateway.example/anthropic", "http://api.deepseek.com/anthropic", "https://api.deepseek.com/anthropic?secret=x", "https://key@api.deepseek.com/v1", "https://api.deepseek.com/v1/#x"} {
-		if _, err := NewClient(Options{APIKey: "x", Model: "m", BaseURL: base}); err == nil {
+		if _, err := NewClient(Options{APIKey: "x", Model: "deepseek-flash", BaseURL: base}); err == nil {
 			t.Errorf("accepted unsafe base %s", base)
 		}
 	}
 	for _, base := range []string{"https://api.deepseek.com/anthropic", "https://api.deepseek.com/anthropic/", "https://api.deepseek.com/v1", "https://gateway.example/v1"} {
-		c, err := NewClient(Options{APIKey: "x", Model: "m", BaseURL: base})
+		c, err := NewClient(Options{APIKey: "x", Model: "deepseek-flash", BaseURL: base})
 		if err != nil || !strings.HasSuffix(c.endpoint, "/v1/chat/completions") {
 			t.Errorf("valid base failed %s: %v", base, err)
 		}

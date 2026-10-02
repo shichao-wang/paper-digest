@@ -15,10 +15,13 @@ import (
 )
 
 var (
-	ErrBudget     = errors.New("request budget exhausted")
-	ErrProtocol   = errors.New("invalid chat response")
-	ErrToolRounds = errors.New("tool stage did not finish within its request limit")
+	ErrBudget            = errors.New("request budget exhausted")
+	ErrProtocol          = errors.New("invalid chat response")
+	ErrToolRounds        = errors.New("tool stage did not finish within its request limit")
+	ErrMigrationRequired = errors.New("chat settings require explicit migration: configure a DeepSeek model and key, or an explicit compatible Chat base URL with its model and key")
 )
+
+const defaultBaseURL = "https://api.deepseek.com/v1"
 
 // Budget 由所有 case 共享，在 HTTP Do 前消费一次；失败同样计数，不自动重试。
 type Budget struct {
@@ -53,9 +56,28 @@ type Client struct {
 }
 
 func NewClient(o Options) (*Client, error) {
-	u, err := url.Parse(o.BaseURL)
-	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "http" && u.Scheme != "https") || strings.TrimSpace(o.APIKey) == "" || strings.TrimSpace(o.Model) == "" {
+	o.BaseURL = strings.TrimSpace(o.BaseURL)
+	o.Model = strings.TrimSpace(o.Model)
+	if strings.TrimSpace(o.APIKey) == "" || o.Model == "" {
 		return nil, errors.New("invalid explicit chat settings")
+	}
+	deepSeekModel := strings.HasPrefix(strings.ToLower(o.Model), "deepseek-")
+	if o.BaseURL == "" {
+		// 旧 Anthropic 配置的空地址不能被默认为另一家服务商。
+		if !deepSeekModel {
+			return nil, ErrMigrationRequired
+		}
+		o.BaseURL = defaultBaseURL
+	}
+	u, err := url.Parse(o.BaseURL)
+	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return nil, errors.New("invalid explicit chat settings")
+	}
+	if strings.EqualFold(u.Hostname(), "api.deepseek.com") {
+		// 同时覆盖调用方已补入官方地址的旧配置；密钥不写入错误。
+		if !deepSeekModel || strings.HasPrefix(strings.ToLower(strings.TrimSpace(o.APIKey)), "sk-ant-") {
+			return nil, ErrMigrationRequired
+		}
 	}
 	if u.Path == "/anthropic" || u.Path == "/anthropic/" {
 		if u.Scheme != "https" || u.Host != "api.deepseek.com" {

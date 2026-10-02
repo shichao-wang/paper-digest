@@ -56,9 +56,6 @@ func (a DeepSeekAnalyzer) Analyze(ctx context.Context, paper papers.Paper) (Summ
 }
 
 func requestChat(ctx context.Context, apiKey, baseURL, model, prompt string) (string, error) {
-	if baseURL = strings.TrimSpace(baseURL); baseURL == "" {
-		baseURL = "https://api.deepseek.com/v1"
-	}
 	client, err := modelchat.NewClient(modelchat.Options{
 		APIKey: apiKey, BaseURL: baseURL, Model: model,
 		Timeout: 90 * time.Second, Budget: modelchat.NewBudget(1),

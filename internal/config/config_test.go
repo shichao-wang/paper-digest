@@ -99,6 +99,21 @@ func TestLibraryDefaultsAndIndependentSwitches(t *testing.T) {
 	}
 }
 
+func TestLibraryCategoriesRejectUnsupportedDuringLoad(t *testing.T) {
+	for _, fields := range []string{`"collect_enabled":true,"categories":["cs.CV"]`, `"categories":["cs.IR","cs.CV"]`, `"categories":["math"]`} {
+		_, err := loadFixture(t, `{"library":{`+fields+`},"arxiv":{"lookback_days":7},"topics":[{"id":"recommendation-advertising-search"}]}`)
+		if err == nil || !strings.Contains(err.Error(), "library.categories") {
+			t.Fatalf("unsupported startup configuration accepted: %s %v", fields, err)
+		}
+	}
+	for _, category := range []string{"cs.IR", "cs.LG", "cs.AI", "cs.CL", "stat.ML"} {
+		cfg, err := loadFixture(t, `{"library":{"collect_enabled":true,"categories":["`+category+`"]},"arxiv":{"lookback_days":7},"topics":[{"id":"recommendation-advertising-search"}]}`)
+		if err != nil || len(cfg.Library.Categories) != 1 || cfg.Library.Categories[0] != category {
+			t.Fatalf("supported category rejected: %s %v", category, err)
+		}
+	}
+}
+
 func TestDeliveryRequiresFileCredentialsOnlyWhenEnabled(t *testing.T) {
 	cfg, err := loadFixture(t, `{"arxiv":{"lookback_days":7},"topics":[{"id":"recommendation-advertising-search","webhook_url":""}]}`)
 	if err != nil {

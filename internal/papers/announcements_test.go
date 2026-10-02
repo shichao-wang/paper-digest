@@ -5,15 +5,19 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/xml"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
+	"github.com/shichao-wang/paper-digest/internal/document"
 	"github.com/shichao-wang/paper-digest/internal/library"
 )
 
@@ -133,6 +137,123 @@ func TestAnnouncementsRealEntryExtracts(t *testing.T) {
 	listing := parseOfficialListing(sourceFixture(t, "real-cs.IR-list-extract.html"))
 	if listing.Total != 41 || listing.Date != "2026-10-01" || len(listing.Reasons) != 0 || len(listing.Sections["new"].IDs) != 16 || len(listing.Sections["cross"].IDs) != 13 || len(listing.Sections["replacement"].IDs) != 12 {
 		t.Fatalf("real official list = %#v", listing)
+	}
+}
+
+func TestCaptureSyncsPublicationAndParentsBeforeReturningReference(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "new-root", "library")
+	source := Source{ArtifactRoot: root}
+	body := []byte("durable source evidence")
+	sum := sha256.Sum256(body)
+	destination := filepath.Join(root, "artifacts", "arxiv", hex.EncodeToString(sum[:1]), hex.EncodeToString(sum[:])+".bin")
+	var synced []string
+	syncDir := func(directory string) error {
+		// The complete immutable file must already be visible when directory
+		// sync starts. No artifact reference may escape before these succeed.
+		captured, err := os.ReadFile(destination)
+		if err != nil || string(captured) != string(body) {
+			t.Fatalf("sync before publication: %q %v", captured, err)
+		}
+		synced = append(synced, directory)
+		return syncCaptureDirectory(directory)
+	}
+	for n := 0; n < 2; n++ {
+		synced = nil
+		artifact, err := source.saveCaptureWithSync(body, "https://arxiv.org/list/cs.IR/new", "announcement-list", syncDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkArtifacts(t, root, []library.Artifact{artifact})
+		want := filepath.Dir(destination)
+		for _, directory := range synced {
+			if directory != want {
+				t.Fatalf("sync order got %s, want %s", directory, want)
+			}
+			want = filepath.Dir(want)
+		}
+		if len(synced) == 0 || synced[len(synced)-1] != string(filepath.Separator) {
+			t.Fatalf("parents not made durable: %v", synced)
+		}
+	}
+	sentinel := errors.New("directory sync failed")
+	for _, failingDirectory := range []string{filepath.Dir(destination), filepath.Dir(root)} {
+		artifact, err := source.saveCaptureWithSync(body, "https://arxiv.org/list/cs.IR/new", "announcement-list", func(directory string) error {
+			if directory == failingDirectory {
+				return sentinel
+			}
+			return nil
+		})
+		if !errors.Is(err, sentinel) || artifact.Path != "" {
+			t.Fatalf("failed sync returned committable reference: %+v %v", artifact, err)
+		}
+	}
+}
+
+type publicTestTransport func(*http.Request) (*http.Response, error)
+
+func (f publicTestTransport) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+func TestPublicRequestPacingAcrossAllArxivAdapters(t *testing.T) {
+	root := t.TempDir()
+	synctest.Test(t, func(t *testing.T) {
+		var starts []time.Time
+		client := &http.Client{Transport: publicTestTransport(func(req *http.Request) (*http.Response, error) {
+			starts = append(starts, time.Now())
+			body := syntheticFeed("")
+			if strings.HasPrefix(req.URL.Path, "/list/") {
+				body = syntheticListing("2026-10-02", 0, nil, nil)
+			}
+			status := http.StatusOK
+			if strings.HasPrefix(req.URL.Path, "/pdf/") {
+				// Exercise the download request without needing an external extractor.
+				status = http.StatusServiceUnavailable
+			}
+			return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body)), Request: req}, nil
+		})}
+		source := Source{Client: client, ArtifactRoot: root}
+		if _, err := source.FetchAnnouncements(context.Background(), []string{"cs.IR"}); err != nil {
+			t.Fatal(err)
+		}
+		identity := library.Identity{Source: "arxiv", PaperID: "2610.00001", Version: "v1"}
+		if _, _, err := source.FetchVersionMetadata(context.Background(), identity); err == nil {
+			t.Fatal("empty exact metadata accepted")
+		}
+		repository := &document.Repository{Root: root, Client: client}
+		if _, err := repository.Ensure(context.Background(), identity); err == nil {
+			t.Fatal("503 PDF response accepted")
+		}
+		if _, err := Fetch(context.Background(), client, "", 1); err != nil {
+			t.Fatal(err)
+		}
+		if len(starts) != 5 {
+			t.Fatalf("requests=%d, want feed/list/metadata/PDF/legacy", len(starts))
+		}
+		for n := 1; n < len(starts); n++ {
+			if gap := starts[n].Sub(starts[n-1]); gap < 3*time.Second {
+				t.Fatalf("adapters failed to share request pacing: start %d gap %s", n, gap)
+			}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_, artifacts, err := source.FetchVersionMetadata(ctx, identity)
+		if !errors.Is(err, context.DeadlineExceeded) || len(artifacts) != 0 || len(starts) != 5 {
+			t.Fatalf("metadata cancellation sent request or capture: %v %v %d", err, artifacts, len(starts))
+		}
+	})
+}
+
+func TestAnnouncementsRejectUnsupportedCategoriesBeforeRequests(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls++ }))
+	defer server.Close()
+	source := Source{Client: server.Client(), FeedBase: server.URL, ListBase: server.URL, ArtifactRoot: t.TempDir()}
+	for _, categories := range [][]string{{"cs.CV"}, {"cs.IR", "cs.CV"}, {"cs.IR", "cs.IR"}} {
+		if _, err := source.FetchAnnouncements(context.Background(), categories); err == nil {
+			t.Fatalf("unsupported category accepted: %v", categories)
+		}
+	}
+	if calls != 0 {
+		t.Fatalf("issued %d requests before category validation", calls)
 	}
 }
 

@@ -178,8 +178,8 @@ func (s *Store) LibraryDetail(ctx context.Context, id library.Identity) (library
 	if err != nil {
 		return result, err
 	}
-	var rid int64
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(relevance_id,0),COALESCE(analysis_id,0) FROM library_versions WHERE source=? AND paper_id=? AND version=?`, identityArgs(id)...).Scan(&rid, &result.AnalysisID); err != nil {
+	var rid, cid int64
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(relevance_id,0),COALESCE(analysis_id,0),COALESCE(comparison_id,0) FROM library_versions WHERE source=? AND paper_id=? AND version=?`, identityArgs(id)...).Scan(&rid, &result.AnalysisID, &cid); err != nil {
 		return result, err
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT version FROM library_versions WHERE source=? AND paper_id=? ORDER BY number`, id.Source, id.PaperID)
@@ -244,7 +244,7 @@ func (s *Store) LibraryDetail(ctx context.Context, id library.Identity) (library
 				rows.Close()
 				return result, err
 			}
-			if cmp.AnalysisID == result.AnalysisID {
+			if oid == cid && cmp.AnalysisID == result.AnalysisID {
 				result.Comparison = &cmp
 			}
 		}

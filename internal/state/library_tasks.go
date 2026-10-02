@@ -283,11 +283,24 @@ func insertOutput(ctx context.Context, tx *sql.Tx, t library.Task, kind string, 
 	}
 	return r.LastInsertId()
 }
+
+// 代次属于整个论文版本，而非单个阶段。新代次排队后保留已有展示结果，
+// 但旧代次后续完成只能保存历史，不能发布输出或推进后继阶段。
+func currentGeneration(ctx context.Context, tx *sql.Tx, t library.Task) (bool, error) {
+	var current bool
+	err := tx.QueryRowContext(ctx, `SELECT NOT EXISTS(SELECT 1 FROM library_tasks WHERE source=? AND paper_id=? AND version=? AND generation>?)`, t.Source, t.PaperID, t.Version, t.Generation).Scan(&current)
+	return current, err
+}
+
 func updatePointer(ctx context.Context, tx *sql.Tx, t library.Task, kind string, id int64) error {
+	current, err := currentGeneration(ctx, tx, t)
+	if err != nil || !current {
+		return err
+	}
 	// kind 只能来自内部固定输出类型。
 	column := kind + "_id"
 	generation := kind + "_generation"
-	_, err := tx.ExecContext(ctx, `UPDATE library_versions SET `+column+`=?,`+generation+`=? WHERE source=? AND paper_id=? AND version=? AND `+generation+`<=?`, id, t.Generation, t.Source, t.PaperID, t.Version, t.Generation)
+	_, err = tx.ExecContext(ctx, `UPDATE library_versions SET `+column+`=?,`+generation+`=? WHERE source=? AND paper_id=? AND version=? AND `+generation+`<=?`, id, t.Generation, t.Source, t.PaperID, t.Version, t.Generation)
 	return err
 }
 func (s *Store) CompleteTask(ctx context.Context, t library.Task, c library.Completion, now time.Time) error {
@@ -297,6 +310,10 @@ func (s *Store) CompleteTask(ctx context.Context, t library.Task, c library.Comp
 	}
 	defer tx.Rollback()
 	if err := verifyLease(ctx, tx, t, now); err != nil {
+		return err
+	}
+	current, err := currentGeneration(ctx, tx, t)
+	if err != nil {
 		return err
 	}
 	if c.Version != nil {
@@ -309,7 +326,7 @@ func (s *Store) CompleteTask(ctx context.Context, t library.Task, c library.Comp
 		if err := tx.QueryRowContext(ctx, `SELECT metadata_generation FROM library_versions WHERE source=? AND paper_id=? AND version=?`, identityArgs(t.Identity)...).Scan(&generation); err != nil {
 			return err
 		}
-		if t.Generation >= generation {
+		if current && t.Generation >= generation {
 			if _, err := upsertVersion(ctx, tx, v); err != nil {
 				return err
 			}
@@ -331,6 +348,12 @@ func (s *Store) CompleteTask(ctx context.Context, t library.Task, c library.Comp
 		}
 		if err := updatePointer(ctx, tx, t, "relevance", id); err != nil {
 			return err
+		}
+		if t.Stage == "relevance" && current && !c.Relevance.DirectlyRelated {
+			// 筛选成功终止当前代次时撤销旧展示指针；不可变输出仍供历史查询。
+			if _, err := tx.ExecContext(ctx, `UPDATE library_versions SET analysis_id=NULL,analysis_generation=MAX(analysis_generation,?),comparison_id=NULL,comparison_generation=MAX(comparison_generation,?) WHERE source=? AND paper_id=? AND version=? AND relevance_id=?`, t.Generation, t.Generation, t.Source, t.PaperID, t.Version, id); err != nil {
+				return err
+			}
 		}
 	}
 	if c.Document != nil {
@@ -397,9 +420,11 @@ func (s *Store) CompleteTask(ctx context.Context, t library.Task, c library.Comp
 	if _, err := tx.ExecContext(ctx, `INSERT INTO library_runs(task_id,data) VALUES(?,?)`, t.ID, raw); err != nil {
 		return err
 	}
-	for _, stage := range c.Next {
-		if err := enqueueTask(ctx, tx, t.Identity, stage, t.Generation); err != nil {
-			return err
+	if current {
+		for _, stage := range c.Next {
+			if err := enqueueTask(ctx, tx, t.Identity, stage, t.Generation); err != nil {
+				return err
+			}
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE library_tasks SET status='succeeded',lease_token='',lease_until=0,error='' WHERE id=?`, t.ID); err != nil {

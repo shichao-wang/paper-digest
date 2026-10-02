@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/shichao-wang/paper-digest/internal/arxivclient"
 	"github.com/shichao-wang/paper-digest/internal/library"
 )
 
@@ -44,8 +45,6 @@ const (
 	sourceOperationTimeout = 10 * time.Minute
 )
 
-var announcementCategories = map[string]bool{"cs.IR": true, "cs.LG": true, "cs.AI": true, "cs.CL": true, "stat.ML": true}
-
 // FetchAnnouncements retains every captured event, including replacements and
 // cross listings. Only batches verified against the complete official same-date
 // listing are marked complete. On transport/resource errors, partial batches and
@@ -56,7 +55,7 @@ func (s Source) FetchAnnouncements(ctx context.Context, categories []string) ([]
 	}
 	seen := map[string]bool{}
 	for _, category := range categories {
-		if !announcementCategories[category] || seen[category] {
+		if !arxivclient.SupportsAnnouncementCategory(category) || seen[category] {
 			return nil, fmt.Errorf("invalid or duplicate arXiv announcement category %q", category)
 		}
 		seen[category] = true
@@ -337,7 +336,7 @@ func (s Source) capture(ctx context.Context, endpoint *url.URL, kind string, bud
 	client.CheckRedirect = func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	}
-	resp, err := client.Do(req)
+	resp, err := arxivclient.Client(&client).Do(req)
 	if err != nil {
 		return nil, library.Artifact{}, fmt.Errorf("fetch arXiv source %s: %w", endpoint, err)
 	}
@@ -365,6 +364,10 @@ func (s Source) capture(ctx context.Context, endpoint *url.URL, kind string, bud
 }
 
 func (s Source) saveCapture(body []byte, sourceURL, kind string) (library.Artifact, error) {
+	return s.saveCaptureWithSync(body, sourceURL, kind, syncCaptureDirectory)
+}
+
+func (s Source) saveCaptureWithSync(body []byte, sourceURL, kind string, syncDir func(string) error) (library.Artifact, error) {
 	sum := sha256.Sum256(body)
 	hash := hex.EncodeToString(sum[:])
 	relative := filepath.Join("artifacts", "arxiv", hash[:2], hash+".bin")
@@ -379,6 +382,9 @@ func (s Source) saveCapture(body []byte, sourceURL, kind string) (library.Artifa
 	}
 	defer os.Remove(temp.Name())
 	if _, err = temp.Write(body); err == nil {
+		err = temp.Chmod(0400)
+	}
+	if err == nil {
 		err = temp.Sync()
 	}
 	closeErr := temp.Close()
@@ -386,9 +392,6 @@ func (s Source) saveCapture(body []byte, sourceURL, kind string) (library.Artifa
 		err = closeErr
 	}
 	if err != nil {
-		return library.Artifact{}, err
-	}
-	if err = os.Chmod(temp.Name(), 0400); err != nil {
 		return library.Artifact{}, err
 	}
 	// Linking publishes the complete file atomically, without overwriting a prior
@@ -406,7 +409,40 @@ func (s Source) saveCapture(body []byte, sourceURL, kind string) (library.Artifa
 			return library.Artifact{}, fmt.Errorf("immutable arXiv capture content mismatch")
 		}
 	}
+	// Flush the publication first, then every ancestor entry that might have
+	// been created by MkdirAll (including ArtifactRoot). Also flush reused paths:
+	// another collector may have linked the file but not yet synced its parents.
+	if err = syncCaptureHierarchy(filepath.Dir(destination), syncDir); err != nil {
+		return library.Artifact{}, fmt.Errorf("sync arXiv capture directories: %w", err)
+	}
 	return artifact, nil
+}
+
+func syncCaptureHierarchy(directory string, syncDir func(string) error) error {
+	directory, err := filepath.Abs(directory)
+	if err != nil {
+		return err
+	}
+	for {
+		if err := syncDir(directory); err != nil {
+			return err
+		}
+		parent := filepath.Dir(directory)
+		if parent == directory {
+			return nil
+		}
+		directory = parent
+	}
+}
+
+func syncCaptureDirectory(directory string) error {
+	f, err := os.Open(directory)
+	if err != nil {
+		return err
+	}
+	syncErr := f.Sync()
+	closeErr := f.Close()
+	return errors.Join(syncErr, closeErr)
 }
 
 type sourceFeed struct {

@@ -24,6 +24,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/shichao-wang/paper-digest/internal/arxivclient"
 	"github.com/shichao-wang/paper-digest/internal/library"
 )
 
@@ -272,7 +273,7 @@ func (r *Repository) download(ctx context.Context, i library.Identity, max int64
 		return nil, "", err
 	}
 	req.Header.Set("Accept", "application/pdf")
-	resp, err := client.Do(req)
+	resp, err := arxivclient.Client(&client).Do(req)
 	if err != nil {
 		return nil, "", err
 	}

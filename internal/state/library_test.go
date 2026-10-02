@@ -473,6 +473,202 @@ func TestLibraryGenerationPointersAndComparisonAnalysisBinding(t *testing.T) {
 	mustLibraryCount(t, s, "library_batches", 0)
 }
 
+func TestLibraryNonDirectReanalysisInvalidatesPointersAndPreservesHistory(t *testing.T) {
+	for _, level := range []string{"unrelated", "uncertain"} {
+		t.Run(level, func(t *testing.T) {
+			ctx := context.Background()
+			s := openTestStore(t, ":memory:")
+			defer s.Close()
+			v := versionFixture(1, "v2")
+			if err := s.UpsertVersion(ctx, v); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.EnqueueTask(ctx, v.Identity, "analyze", 0); err != nil {
+				t.Fatal(err)
+			}
+			old := claimFixture(t, s, "analyze", libraryNow)
+			direct := library.Relevance{Level: "direct", DirectlyRelated: true, Topics: []string{"search"}, Rationale: "old screening"}
+			a := library.Analysis{PaperVersionID: v.Key(), Model: "old", Content: library.AnalysisContent{TitleZH: "obsolete analysis", Relevance: direct}}
+			cmp := library.Comparison{PreviousVersion: "v1", Status: "ready", Reason: "old comparison"}
+			if err := s.CompleteTask(ctx, old, library.Completion{Relevance: &direct, Analysis: &a, Comparison: &cmp}, libraryNow); err != nil {
+				t.Fatal(err)
+			}
+			_, oldID, err := s.Analysis(ctx, v.Identity)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var oldAnalysis, oldComparison []byte
+			if err := s.db.QueryRow(`SELECT a.data,c.data FROM library_versions v JOIN library_outputs a ON a.id=v.analysis_id JOIN library_outputs c ON c.id=v.comparison_id`).Scan(&oldAnalysis, &oldComparison); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.EnqueueTask(ctx, v.Identity, "relevance", 1); err != nil {
+				t.Fatal(err)
+			}
+			newTask := claimFixture(t, s, "relevance", libraryNow)
+			if err := s.FailTask(ctx, newTask, "paused", "budget", time.Time{}, libraryNow); err != nil {
+				t.Fatal(err)
+			}
+			detail, err := s.LibraryDetail(ctx, v.Identity)
+			if err != nil || detail.AnalysisID != oldID || detail.Comparison.Status != "ready" || detail.Relevance.Level != "direct" {
+				t.Fatalf("unfinished reanalysis lost visible results: %+v err=%v", detail, err)
+			}
+			if err := s.RetryTask(ctx, newTask.ID); err != nil {
+				t.Fatal(err)
+			}
+			newTask = claimFixture(t, s, "relevance", libraryNow)
+			nonDirect := library.Relevance{Level: level, Rationale: "new screening"}
+			// 指针撤销必须随整个完成事务提交，不能在后继校验失败时提前生效。
+			if err := s.CompleteTask(ctx, newTask, library.Completion{Relevance: &nonDirect, Next: []string{"invalid"}}, libraryNow); !errors.Is(err, library.ErrInvalid) {
+				t.Fatalf("invalid completion=%v", err)
+			}
+			if _, id, err := s.Analysis(ctx, v.Identity); err != nil || id != oldID {
+				t.Fatalf("rollback lost analysis id=%d err=%v", id, err)
+			}
+			if err := s.CompleteTask(ctx, newTask, library.Completion{Relevance: &nonDirect}, libraryNow); err != nil {
+				t.Fatal(err)
+			}
+			detail, err = s.LibraryDetail(ctx, v.Identity)
+			if err != nil || detail.Relevance.Level != level || detail.Analysis != nil || detail.AnalysisID != 0 || detail.Comparison.AnalysisID != 0 || detail.Comparison.Status == "ready" || len(detail.RelevanceHistory) != 2 {
+				t.Fatalf("obsolete detail output=%+v err=%v", detail, err)
+			}
+			if _, _, err := s.Analysis(ctx, v.Identity); !errors.Is(err, library.ErrNotFound) {
+				t.Fatalf("obsolete analysis lookup=%v", err)
+			}
+			for _, q := range []library.Query{{Relevance: "all"}, {Relevance: level}, {Relevance: "direct"}, {Relevance: "all", Q: "obsolete analysis"}} {
+				page, err := s.BrowseLibrary(ctx, q)
+				want := 1
+				if q.Relevance == "direct" || q.Q != "" {
+					want = 0
+				}
+				if err != nil || page.Total != want || (want == 1 && page.Items[0].AnalysisID != 0) {
+					t.Fatalf("obsolete browse output query=%+v page=%+v err=%v", q, page, err)
+				}
+			}
+			var aid, cid sql.NullInt64
+			var ag, cg int
+			if err := s.db.QueryRow(`SELECT analysis_id,comparison_id,analysis_generation,comparison_generation FROM library_versions`).Scan(&aid, &cid, &ag, &cg); err != nil || aid.Valid || cid.Valid || ag != 1 || cg != 1 {
+				t.Fatalf("invalidated pointers=%v/%v generations=%d/%d err=%v", aid, cid, ag, cg, err)
+			}
+			var savedAnalysis, savedComparison []byte
+			if err := s.db.QueryRow(`SELECT data FROM library_outputs WHERE id=?`, oldID).Scan(&savedAnalysis); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.db.QueryRow(`SELECT data FROM library_outputs WHERE kind='comparison'`).Scan(&savedComparison); err != nil {
+				t.Fatal(err)
+			}
+			if string(savedAnalysis) != string(oldAnalysis) || string(savedComparison) != string(oldComparison) {
+				t.Fatal("immutable analysis/comparison history changed")
+			}
+			historical, id, err := s.AnalysisForTask(ctx, old)
+			if err != nil || id != oldID || historical.Model != "old" {
+				t.Fatalf("history lost analysis=%+v id=%d err=%v", historical, id, err)
+			}
+		})
+	}
+}
+
+func TestLibrarySupersededGenerationCompletesOnlyIntoHistory(t *testing.T) {
+	for _, stage := range []string{"metadata", "relevance", "non-direct-relevance", "document", "saved-document", "analyze", "compare"} {
+		for _, newerSucceeded := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/newer-succeeded=%t", stage, newerSucceeded), func(t *testing.T) {
+				ctx := context.Background()
+				s := openTestStore(t, ":memory:")
+				defer s.Close()
+				v := versionFixture(1, "v2")
+				if err := s.UpsertVersion(ctx, v); err != nil {
+					t.Fatal(err)
+				}
+				taskStage := stage
+				if stage == "saved-document" {
+					taskStage = "document"
+				} else if stage == "non-direct-relevance" {
+					taskStage = "relevance"
+				}
+				var boundID int64
+				if stage == "compare" {
+					if err := s.EnqueueTask(ctx, v.Identity, "analyze", 0); err != nil {
+						t.Fatal(err)
+					}
+					a := library.Analysis{PaperVersionID: v.Key(), Model: "existing"}
+					if err := s.CompleteTask(ctx, claimFixture(t, s, "analyze", libraryNow), library.Completion{Analysis: &a}, libraryNow); err != nil {
+						t.Fatal(err)
+					}
+					_, boundID, _ = s.Analysis(ctx, v.Identity)
+				}
+				if err := s.EnqueueTask(ctx, v.Identity, taskStage, 0); err != nil {
+					t.Fatal(err)
+				}
+				old := claimFixture(t, s, taskStage, libraryNow)
+				if err := s.EnqueueTask(ctx, v.Identity, "relevance", 1); err != nil {
+					t.Fatal(err)
+				}
+				if newerSucceeded {
+					newTask := claimFixture(t, s, "relevance", libraryNow)
+					rel := library.Relevance{Level: "unrelated", Rationale: "new generation"}
+					if err := s.CompleteTask(ctx, newTask, library.Completion{Relevance: &rel}, libraryNow); err != nil {
+						t.Fatal(err)
+					}
+				}
+				before, err := s.LibraryDetail(ctx, v.Identity)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var beforePointers string
+				if err := s.db.QueryRow(`SELECT json_array(relevance_id,document_id,analysis_id,comparison_id,metadata_generation,relevance_generation,document_generation,analysis_generation,comparison_generation) FROM library_versions`).Scan(&beforePointers); err != nil {
+					t.Fatal(err)
+				}
+				c := library.Completion{Run: library.Run{Model: "old history"}}
+				kind := taskStage
+				direct := library.Relevance{Level: "direct", DirectlyRelated: true, Topics: []string{"search"}, Rationale: "old generation"}
+				doc := library.Document{ID: "late-document", Identity: v.Identity, Quality: "ready"}
+				switch stage {
+				case "metadata":
+					v.Title = "obsolete metadata"
+					c.Version, c.Next = &v, []string{"relevance"}
+				case "relevance", "non-direct-relevance":
+					if stage == "non-direct-relevance" {
+						direct.Level, direct.DirectlyRelated = "uncertain", false
+					}
+					c.Relevance, c.Next = &direct, []string{"document"}
+				case "document":
+					c.Document, c.Next = &doc, []string{"analyze"}
+				case "saved-document":
+					if err := s.SaveTaskDocument(ctx, old, doc, libraryNow); err != nil {
+						t.Fatal(err)
+					}
+					c.Document, c.Next = &doc, []string{"analyze"}
+				case "analyze":
+					kind = "analysis"
+					c.Analysis = &library.Analysis{PaperVersionID: v.Key(), Model: "late analysis"}
+					c.Relevance, c.Next = &direct, []string{"compare"}
+				case "compare":
+					kind = "comparison"
+					c.Comparison = &library.Comparison{AnalysisID: boundID, PreviousVersion: "v1", Status: "ready", Reason: "late comparison"}
+				}
+				if err := s.CompleteTask(ctx, old, c, libraryNow); err != nil {
+					t.Fatal(err)
+				}
+				after, err := s.LibraryDetail(ctx, v.Identity)
+				if err != nil || !reflect.DeepEqual(after.Version, before.Version) || !reflect.DeepEqual(after.Relevance, before.Relevance) || after.AnalysisID != before.AnalysisID || !reflect.DeepEqual(after.Comparison, before.Comparison) || len(after.Tasks) != len(before.Tasks) {
+					t.Fatalf("stale completion published or enqueued: before=%+v after=%+v err=%v", before, after, err)
+				}
+				var afterPointers string
+				if err := s.db.QueryRow(`SELECT json_array(relevance_id,document_id,analysis_id,comparison_id,metadata_generation,relevance_generation,document_generation,analysis_generation,comparison_generation) FROM library_versions`).Scan(&afterPointers); err != nil || afterPointers != beforePointers {
+					t.Fatalf("stale pointers before=%s after=%s err=%v", beforePointers, afterPointers, err)
+				}
+				var count int
+				if err := s.db.QueryRow(`SELECT COUNT(*) FROM library_outputs WHERE task_id=? AND kind=?`, old.ID, kind).Scan(&count); err != nil || count != 1 {
+					t.Fatalf("history output count=%d err=%v", count, err)
+				}
+				got, err := s.GetTask(ctx, old.ID)
+				if err != nil || got.Status != "succeeded" || got.LeaseToken != "" || after.Runs[len(after.Runs)-1].Model != "old history" {
+					t.Fatalf("stale completion history task=%+v err=%v", got, err)
+				}
+			})
+		}
+	}
+}
+
 func TestLibraryReferenceDocumentPersistsWithoutSchedulingAndFirstAnnouncementQueues(t *testing.T) {
 	ctx := context.Background()
 	s := openTestStore(t, ":memory:")

@@ -11,10 +11,11 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/shichao-wang/paper-digest/internal/arxivclient"
 )
 
 var topicIDPattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
-var categoryPattern = regexp.MustCompile(`^[a-z]+(?:\.[A-Z]{2})?$`)
 
 type Topic struct {
 	ID         string `json:"id"`
@@ -35,7 +36,7 @@ type Library struct {
 
 func (l *Library) defaults(databasePath string) {
 	if len(l.Categories) == 0 {
-		l.Categories = []string{"cs.IR", "cs.LG", "cs.AI", "cs.CL", "stat.ML"}
+		l.Categories = arxivclient.AnnouncementCategories()
 	}
 	if l.DocumentDir == "" {
 		l.DocumentDir = filepath.Join(filepath.Dir(databasePath), "library")
@@ -62,8 +63,8 @@ func (l Library) Validate() error {
 	}
 	seen := map[string]bool{}
 	for _, c := range l.Categories {
-		if !categoryPattern.MatchString(c) || seen[c] {
-			return errors.New("library.categories 包含无效或重复分类")
+		if !arxivclient.SupportsAnnouncementCategory(c) || seen[c] {
+			return errors.New("library.categories 包含不支持或重复分类；支持 cs.IR、cs.LG、cs.AI、cs.CL、stat.ML")
 		}
 		seen[c] = true
 	}

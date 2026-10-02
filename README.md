@@ -79,9 +79,9 @@ go run ./cmd/paper-digest --config data/web-preview/config.json serve
 
 配置文件还包含 `database.path`（保持 `/data/digest.db`，对应现有数据卷）、`delivery.enabled`、`anthropic.api_key`、`anthropic.model`、可选的 `anthropic.base_url` 和 `arxiv.lookback_days`（1～30 天）。`anthropic` 是保留的配置兼容名称，当前业务请求统一采用 Chat Completions；程序只使用配置中的密钥和地址，不读取旧环境变量。直接运行 CLI 时默认读取工作目录下的 `config/config.json`，如需其他路径可在子命令前指定 `--config <文件>`。`health` 和 `preview` 不读取该文件。
 
-默认模型为 `deepseek-flash`，默认地址为 `https://api.deepseek.com/v1`，请求 `POST /v1/chat/completions`。已有官方 `https://api.deepseek.com/anthropic` 配置可在内存中转换为同一官方 Chat 地址，实际文件无需改名。使用其他兼容 Chat 网关时，配置根地址或 `/v1` 地址及相应密钥、模型；任意网关的 `/anthropic` 路径不会自动改写。宿主机可用 `http://127.0.0.1:3425`；Docker Desktop 容器用 `http://host.docker.internal:3425`。客户端关闭思考和流式输出，没有自动重试；仅接受正常完成且非空的正文。配置后仍保持 `delivery.enabled=false`，直至完成飞书试发和投递确认。
+默认模型为 `deepseek-flash`，默认地址为 `https://api.deepseek.com/v1`，请求 `POST /v1/chat/completions`。旧 Anthropic 型号与空地址组合会在请求前拒绝，不能把旧凭据解释为 DeepSeek 密钥；迁移需明确设置 DeepSeek 型号与对应密钥，或显式配置兼容 Chat 网关地址。已有官方 `https://api.deepseek.com/anthropic` 配置可在内存中转换为同一官方 Chat 地址，实际文件无需改名。使用其他兼容 Chat 网关时，配置根地址或 `/v1` 地址及相应密钥、模型；任意网关的 `/anthropic` 路径不会自动改写。宿主机可用 `http://127.0.0.1:3425`；Docker Desktop 容器用 `http://host.docker.internal:3425`。客户端关闭思考和流式输出，没有自动重试；仅接受正常完成且非空的正文。配置后仍保持 `delivery.enabled=false`，直至完成飞书试发和投递确认。
 
-从旧 `.env` 迁移时，将 `ANTHROPIC_API_KEY`、`ANTHROPIC_MODEL`、`ARXIV_LOOKBACK_DAYS`、`ENABLE_DELIVERY` 分别填入上述 JSON 字段；将 `FEISHU_WEBHOOK_RAS`（旧版可能为 `FEISHU_WEBHOOK_URL`）填入相应主题的 `webhook_url`。不要把 URL 或 API key 粘贴进示例配置或提交到 Git。旧 `.env` 不再被使用，若本机存在请自行安全处理。修改实际配置后用 `docker compose up -d --force-recreate paper-digest` 重建容器以重新挂载配置（不重建镜像、不删除数据卷）；代码或 Compose 变更才需要重建镜像。
+从旧 `.env` 迁移时，将 `ARXIV_LOOKBACK_DAYS`、`ENABLE_DELIVERY` 填入上述 JSON 字段；模型配置需明确选择服务：使用 DeepSeek 官方时填写对应的 DeepSeek 密钥与型号，使用兼容 Chat 网关时显式填写其地址、密钥与型号。不能只把旧 `ANTHROPIC_API_KEY` 和 Claude 型号复制到空地址配置当作已完成迁移；官方地址也会在请求前拒绝明显的 `sk-ant-*` 密钥。将 `FEISHU_WEBHOOK_RAS`（旧版可能为 `FEISHU_WEBHOOK_URL`）填入相应主题的 `webhook_url`。不要把 URL 或 API key 粘贴进示例配置或提交到 Git。旧 `.env` 不再被使用，若本机存在请自行安全处理。修改实际配置后用 `docker compose up -d --force-recreate paper-digest` 重建容器以重新挂载配置（不重建镜像、不删除数据卷）；代码或 Compose 变更才需要重建镜像。
 
 可以预先添加其他主题的机器人 URL 并对其受控试发，但**新增主题不会启动该主题的日报**：目前只运行上述联合主题；新主题还需另行实现论文抓取、筛选、渲染和调度。
 

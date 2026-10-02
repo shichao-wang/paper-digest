@@ -167,6 +167,111 @@ func TestCompareBindsExactGenerationBeforeModelAndPreservesVisibleResults(t *tes
 	}
 }
 
+type reanalysisScreen struct {
+	*fakePipelineAnalyzer
+	level        string
+	beforeScreen func()
+}
+
+func (a *reanalysisScreen) Screen(ctx context.Context, v library.Version, cp analysis.Checkpoint, save analysis.Save) (library.Relevance, library.Run, error) {
+	if a.beforeScreen != nil {
+		a.beforeScreen()
+		a.beforeScreen = nil
+	}
+	rel := pipelineRelevance(a.level == "direct")
+	rel.Level = a.level
+	return rel, library.Run{Model: "reanalysis screening"}, nil
+}
+
+func TestReanalysisScreeningClearsNonDirectResultsOnlyAfterSuccess(t *testing.T) {
+	for _, level := range []string{"direct", "unrelated", "uncertain"} {
+		t.Run(level, func(t *testing.T) {
+			ctx := context.Background()
+			id := pipelineIdentity(5, "v2")
+			r, _, docs, base := pipelineTestRunner(t, []library.CategoryBatch{pipelineBatch(id)})
+			if err := r.Collect(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if err := r.Process(ctx); err != nil {
+				t.Fatal(err)
+			}
+			old := pipelineDetail(t, r, id)
+			if old.AnalysisID == 0 || old.Comparison.Status != "ready" {
+				t.Fatalf("fixture not ready=%+v", old)
+			}
+			if err := r.Store.EnqueueTask(ctx, id, "relevance", 1); err != nil {
+				t.Fatal(err)
+			}
+			pending := pipelineDetail(t, r, id)
+			if pending.AnalysisID != old.AnalysisID || pending.Comparison.Status != "ready" {
+				t.Fatalf("queued reanalysis lost results=%+v", pending)
+			}
+			r.Analyzer = &reanalysisScreen{fakePipelineAnalyzer: base, level: level}
+			base.analyzeErrors[id.Key()] = library.ErrPaused
+			ensures := docs.ensures[id.Key()]
+			if err := r.Process(ctx); err != nil {
+				t.Fatal(err)
+			}
+			detail := pipelineDetail(t, r, id)
+			if detail.Relevance.Level != level {
+				t.Fatalf("relevance=%+v", detail.Relevance)
+			}
+			if level == "direct" {
+				if detail.AnalysisID != old.AnalysisID || detail.Comparison.Status != "ready" || pipelineTask(t, detail, "analyze").Status != "paused" {
+					t.Fatalf("unsuccessful direct generation lost old results=%+v", detail)
+				}
+			} else {
+				if detail.AnalysisID != 0 || detail.Analysis != nil || detail.Comparison.Status == "ready" || docs.ensures[id.Key()] != ensures || base.analyzed[id.Key()] != 1 {
+					t.Fatalf("non-direct reanalysis retained output or did downstream work=%+v", detail)
+				}
+				for _, task := range detail.Tasks {
+					if task.Generation == 1 && task.Stage != "relevance" {
+						t.Fatalf("non-direct successor=%+v", task)
+					}
+				}
+			}
+			history, aid, err := r.Store.AnalysisForTask(ctx, library.Task{Identity: id, Generation: 0})
+			if err != nil || history == nil || aid != old.AnalysisID {
+				t.Fatalf("old history lost id=%d err=%v", aid, err)
+			}
+		})
+	}
+}
+
+func TestLateScreeningCannotRestartSupersededGeneration(t *testing.T) {
+	ctx := context.Background()
+	id := pipelineIdentity(6, "v2")
+	r, _, docs, base := pipelineTestRunner(t, nil)
+	if err := r.Store.UpsertVersion(ctx, pipelineVersion(id)); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Store.EnqueueTask(ctx, id, "relevance", 0); err != nil {
+		t.Fatal(err)
+	}
+	old := generationClaim(t, r, "relevance")
+	r.Analyzer = &reanalysisScreen{fakePipelineAnalyzer: base, level: "direct", beforeScreen: func() {
+		// 老筛选执行中，新代次完成拒绝结果，然后老筛选才返回 direct。
+		if err := r.Store.EnqueueTask(ctx, id, "relevance", 1); err != nil {
+			t.Fatal(err)
+		}
+		newer := generationClaim(t, r, "relevance")
+		rel := pipelineRelevance(false)
+		if err := r.Store.CompleteTask(ctx, newer, library.Completion{Relevance: &rel}, pipelineTestNow); err != nil {
+			t.Fatal(err)
+		}
+	}}
+	if err := r.execute(ctx, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Process(ctx); err != nil {
+		t.Fatal(err)
+	}
+	detail := pipelineDetail(t, r, id)
+	if detail.Relevance.Level != "unrelated" || detail.AnalysisID != 0 || len(detail.Tasks) != 2 || len(detail.RelevanceHistory) != 2 || len(docs.ensures) != 0 || len(base.analyzed) != 0 {
+		t.Fatalf("old screening restarted processing=%+v", detail)
+	}
+}
+
 func TestAnalyzeReusesEarlierDocumentAndRejectsFutureGeneration(t *testing.T) {
 	ctx := context.Background()
 	id := pipelineIdentity(2, "v1")

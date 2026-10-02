@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/shichao-wang/paper-digest/internal/arxivclient"
 )
 
 const defaultBaseURL = "https://export.arxiv.org/api/query"
@@ -90,7 +92,7 @@ func Fetch(ctx context.Context, client *http.Client, baseURL string, limit int) 
 	if err != nil {
 		return nil, fmt.Errorf("create arXiv request: %w", err)
 	}
-	resp, err := client.Do(req)
+	resp, err := arxivclient.Client(client).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetch arXiv feed: %w", err)
 	}
