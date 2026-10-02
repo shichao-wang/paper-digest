@@ -143,9 +143,8 @@ func (c Config) Webhook(topicID string) (string, error) {
 		if webhook == "" {
 			return "", errors.New("缺少主题 Webhook；请先确认目标群和机器人身份")
 		}
-		parsed, err := url.Parse(webhook)
-		if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" {
-			return "", errors.New("主题 Webhook 必须是有效的 HTTPS URL")
+		if err := ValidateWebhookURL(webhook); err != nil {
+			return "", err
 		}
 		return webhook, nil
 	}
@@ -159,9 +158,24 @@ func (c Config) DatabasePath() (string, error) {
 	return c.Database.Path, nil
 }
 
-func (c Config) ValidateDelivery(topicID string) (string, error) {
-	if strings.TrimSpace(c.Anthropic.APIKey) == "" {
-		return "", errors.New("启用真实运行需要 anthropic.api_key")
+// ValidateWebhookURL 不回显地址，供兼容配置、页面设置与发送复用。
+func ValidateWebhookURL(webhook string) error {
+	parsed, err := url.Parse(webhook)
+	if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil || parsed.Fragment != "" || strings.Contains(webhook, "#") {
+		return errors.New("主题 Webhook 必须是有效的 HTTPS URL，不能包含凭据或片段")
 	}
-	return c.Webhook(topicID)
+	return nil
+}
+
+// ValidateDelivery 校验真实运行所需的密钥与主题身份，Webhook 允许稍后从页面设置。
+func (c Config) ValidateDelivery(topicID string) error {
+	if strings.TrimSpace(c.Anthropic.APIKey) == "" {
+		return errors.New("启用真实运行需要 anthropic.api_key")
+	}
+	for _, topic := range c.Topics {
+		if topic.ID == topicID {
+			return nil
+		}
+	}
+	return errors.New("未知主题；请检查主题配置")
 }

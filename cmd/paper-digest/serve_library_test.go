@@ -36,7 +36,7 @@ func TestServeLibrarySwitchesAreIndependentOfDelivery(t *testing.T) {
 			go func() {
 				result <- serve(ctx, cfg, serveOptions{Listen: "127.0.0.1:0"}, serveDependencies{
 					StaticFS: fixtureFS(),
-					NewWorker: func(config.Config, *state.Store, string) (worker, error) {
+					NewWorker: func(config.Config, *state.Store) (worker, error) {
 						t.Error("disabled delivery constructed worker")
 						return nil, errors.New("unexpected delivery")
 					},
@@ -101,7 +101,7 @@ func TestLibraryServeStartupValidationRunsBeforeAnyWorkerOrRecovery(t *testing.T
 			cfg.Library.ProcessEnabled = true
 			deps := serveDependencies{
 				StaticFS: fixtureFS(),
-				NewWorker: func(config.Config, *state.Store, string) (worker, error) {
+				NewWorker: func(config.Config, *state.Store) (worker, error) {
 					if kind == "delivery-factory" {
 						return nil, errors.New("delivery factory failed")
 					}
@@ -192,7 +192,7 @@ func TestEitherWorkerExitCancelsSiblingAndWaitsBeforeClosingStore(t *testing.T) 
 			go func() {
 				result <- serve(ctx, cfg, serveOptions{Listen: "127.0.0.1:0"}, serveDependencies{
 					StaticFS:         fixtureFS(),
-					NewWorker:        func(_ config.Config, store *state.Store, _ string) (worker, error) { return factory("delivery", store) },
+					NewWorker:        func(_ config.Config, store *state.Store) (worker, error) { return factory("delivery", store) },
 					NewLibraryWorker: func(_ config.Config, store *state.Store) (worker, error) { return factory("library", store) },
 					Listen: func(network, address string) (net.Listener, error) {
 						var err error

@@ -37,8 +37,8 @@ func main() {
 
 const testMessage = "【论文日报机器人连通性测试】这是一条人工触发的测试消息，不是正式论文日报；未调用模型，也未整理真实论文。"
 
-func sendTest(ctx context.Context, webhook string, client *http.Client) error {
-	return (delivery.Feishu{WebhookURL: webhook, Client: client}).Send(ctx, testMessage)
+func sendTest(ctx context.Context, store *state.Store, topic string, client *http.Client) error {
+	return (delivery.StoredFeishu{Store: store, Topic: topic, Client: client}).Send(ctx, testMessage)
 }
 
 func run(args []string) error {
@@ -60,13 +60,24 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
-		webhook, err := cfg.Webhook(args[2])
+		knownTopic := false
+		for _, topic := range cfg.Topics {
+			if topic.ID == args[2] {
+				knownTopic = true
+				break
+			}
+		}
+		if !knownTopic {
+			return errors.New("未知主题；请检查主题配置")
+		}
+		store, err := openStore(context.Background(), cfg)
 		if err != nil {
 			return err
 		}
+		defer store.Close()
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		if err := sendTest(ctx, webhook, nil); err != nil {
+		if err := sendTest(ctx, store, args[2], nil); err != nil {
 			return err
 		}
 		fmt.Println("飞书已确认接收测试请求；请在目标群核对消息，不要仅凭响应判断送达。")
@@ -186,11 +197,11 @@ type worker interface {
 type serveDependencies struct {
 	StaticFS         fs.FS
 	Listen           func(string, string) (net.Listener, error)
-	NewWorker        func(config.Config, *state.Store, string) (worker, error)
+	NewWorker        func(config.Config, *state.Store) (worker, error)
 	NewLibraryWorker func(config.Config, *state.Store) (worker, error)
 }
 
-func defaultWorker(cfg config.Config, store *state.Store, webhook string) (worker, error) {
+func defaultWorker(cfg config.Config, store *state.Store) (worker, error) {
 	model := cfg.Anthropic.Model
 	if model == "" {
 		model = "deepseek-flash"
@@ -203,22 +214,32 @@ func defaultWorker(cfg config.Config, store *state.Store, webhook string) (worke
 			return papers.Fetch(fetchCtx, &http.Client{Timeout: 40 * time.Second}, "", 100)
 		},
 		Analyzer: digest.DeepSeekAnalyzer{Model: model, APIKey: cfg.Anthropic.APIKey, BaseURL: cfg.Anthropic.BaseURL},
-		Sender:   delivery.Feishu{WebhookURL: webhook}, LookbackDays: cfg.Arxiv.LookbackDays, Now: time.Now,
+		Sender:   delivery.StoredFeishu{Store: store, Topic: job.Topic}, LookbackDays: cfg.Arxiv.LookbackDays, Now: time.Now,
 	}, nil
+}
+
+func openStore(ctx context.Context, cfg config.Config) (*state.Store, error) {
+	path, err := cfg.DatabasePath()
+	if err != nil {
+		return nil, err
+	}
+	store, err := state.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	if err := store.MigrateWebhooks(ctx, cfg.Topics); err != nil {
+		store.Close()
+		return nil, err
+	}
+	return store, nil
 }
 
 func serve(parent context.Context, cfg config.Config, options serveOptions, deps serveDependencies) error {
 	if err := parent.Err(); err != nil {
 		return err
 	}
-	path, err := cfg.DatabasePath()
-	if err != nil {
-		return err
-	}
-	var webhook string
 	if cfg.Delivery.Enabled {
-		webhook, err = cfg.ValidateDelivery(job.Topic)
-		if err != nil {
+		if err := cfg.ValidateDelivery(job.Topic); err != nil {
 			return err
 		}
 	}
@@ -233,7 +254,7 @@ func serve(parent context.Context, cfg config.Config, options serveOptions, deps
 			return err
 		}
 	}
-	store, err := state.Open(path)
+	store, err := openStore(parent, cfg)
 	if err != nil {
 		return err
 	}
@@ -242,7 +263,7 @@ func serve(parent context.Context, cfg config.Config, options serveOptions, deps
 	if staticFS == nil {
 		staticFS = os.DirFS(options.WebDir)
 	}
-	handler, err := web.NewWithDocuments(store, staticFS, &document.Repository{Root: cfg.Library.DocumentDir})
+	handler, err := web.NewWithDocuments(store, staticFS, &document.Repository{Root: cfg.Library.DocumentDir}, web.Options{DeliveryEnabled: cfg.Delivery.Enabled, Topics: cfg.Topics})
 	if err != nil {
 		return err
 	}
@@ -252,7 +273,7 @@ func serve(parent context.Context, cfg config.Config, options serveOptions, deps
 		if factory == nil {
 			factory = defaultWorker
 		}
-		runner, err = factory(cfg, store, webhook)
+		runner, err = factory(cfg, store)
 		if err != nil {
 			return err
 		}

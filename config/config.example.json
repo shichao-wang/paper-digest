@@ -15,6 +15,6 @@
     "task_timeout_seconds": 1800
   },
   "topics": [
-    {"id": "recommendation-advertising-search", "webhook_url": ""}
+    {"id": "recommendation-advertising-search"}
   ]
 }

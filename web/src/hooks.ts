@@ -11,14 +11,16 @@ export function useLocation() {
       window.removeEventListener('app-location-change', update)
     }
   }, [])
-  const navigate = useCallback((updates: Record<string, string | null>) => {
+  const navigate = useCallback((updates: Record<string, string | null>, replace = false) => {
     const params = new URLSearchParams(window.location.search)
     for (const [key, value] of Object.entries(updates)) {
       if (value === null || value === '') params.delete(key)
       else params.set(key, value)
     }
     const query = params.toString()
-    window.history.pushState(null, '', `${window.location.pathname}${query ? `?${query}` : ''}`)
+    const url = `${window.location.pathname}${query ? `?${query}` : ''}`
+    if (replace) window.history.replaceState(null, '', url)
+    else window.history.pushState(null, '', url)
     setSearch(window.location.search)
     window.dispatchEvent(new Event('app-location-change'))
   }, [])

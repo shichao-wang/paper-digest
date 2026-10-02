@@ -81,7 +81,9 @@ Chat 工具阶段保留完整 assistant、逐调用结果及每块每轮用量�
 - `GET /api/library/status`
 - `GET /api/library/evidence?id=…&version=vN&document=…&block=…`
 
-状态筛选可用 `paused` 或 `analyze:paused`。查询不会启动模型。列表／详情不返回检查点会话或租约 token，正文按需读取。旧日报 API 保持；`paper+paperDate` 深链仍读取当天摘要快照，`view=digests|legacy` 可浏览历史。
+状态筛选可用 `paused` 或 `analyze:paused`。查询不会启动模型。列表／详情不返回检查点会话或租约 token，正文按需读取。旧日报 API 保持；`paper+paperDate` 深链仍读取当天摘要快照，`view=digests|legacy` 可浏览历史。旧摘要／日报使用 URL 参数 `digestTopic` 保存配置主题 ID，并向旧 API 传递 `topic`；新版本库的 `topic` 仍是论文研究主题标签，互不混用。旧链接中的配置主题参数仍兼容。
+
+「日报主题管理」提供已登记主题的 Webhook 设置入口，保存到 SQLite，不影响只读版本库查询。设置 API 保留回环 Host、Origin 和输入校验，响应不返回已存地址；保存／清除不发送群消息。运行配置与旧地址迁移规则见 [README](../README.md#主题与机器人配置)。
 
 ## 备份恢复
 

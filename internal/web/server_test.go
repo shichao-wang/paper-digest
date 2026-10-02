@@ -3,13 +3,17 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/fstest"
 
+	"github.com/shichao-wang/paper-digest/internal/config"
 	"github.com/shichao-wang/paper-digest/internal/digest"
 	"github.com/shichao-wang/paper-digest/internal/job"
 	"github.com/shichao-wang/paper-digest/internal/papers"
@@ -47,6 +51,185 @@ func request(handler http.Handler, method, target, accept string) *httptest.Resp
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 	return w
+}
+
+func TestWebhookSettingsPersistWithoutExposingURL(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.db")
+	store, err := state.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { store.Close() }()
+	files := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("fixture")}}
+	handler, err := New(store, files, Options{DeliveryEnabled: true, Topics: []config.Topic{{ID: job.Topic}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Error("设置不得试发") }))
+	defer server.Close()
+	check := func(response *httptest.ResponseRecorder, configured bool) {
+		t.Helper()
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(response.Body.Bytes(), &fields); err != nil {
+			t.Fatal(err)
+		}
+		if response.Code != 200 || len(fields) != 3 || string(fields["topic"]) != `"`+job.Topic+`"` || string(fields["configured"]) != fmt.Sprint(configured) || string(fields["deliveryEnabled"]) != "true" || response.Header().Get("Cache-Control") != "no-store" || strings.Contains(response.Body.String(), server.URL) || strings.Contains(response.Body.String(), "secret") {
+			t.Fatalf("settings response=%d %s", response.Code, response.Body.String())
+		}
+	}
+	check(request(handler, "GET", "/api/settings/webhook", ""), false)
+	put := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("PUT", "http://localhost/api/settings/webhook", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json; charset=utf-8")
+		req.Header.Set("Origin", "http://"+req.Host)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		return w
+	}
+	check(put(`{"webhookURL":"  `+server.URL+`/secret  "}`), true)
+	if got, err := store.Webhook(context.Background(), job.Topic); err != nil || got != server.URL+"/secret" {
+		t.Fatal("设置未保存或未 trim")
+	}
+	store.Close()
+	store, err = state.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err = New(store, files, Options{DeliveryEnabled: true, Topics: []config.Topic{{ID: job.Topic}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check(request(handler, "GET", "/api/settings/webhook", ""), true)
+	check(put(`{"webhookURL":" \t "}`), false)
+	check(request(handler, "GET", "/api/settings/webhook", ""), false)
+	store.Close()
+	for _, method := range []string{"GET", "PUT"} {
+		req := httptest.NewRequest(method, "http://localhost/api/settings/webhook", strings.NewReader(`{"webhookURL":"`+server.URL+`/secret"}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != 503 || w.Body.String() != "{\"error\":\"service unavailable\"}\n" {
+			t.Fatalf("database failure exposed: %d %s", w.Code, w.Body.String())
+		}
+	}
+}
+
+func TestWebhookPutStrictValidationAndSameOrigin(t *testing.T) {
+	store, handler := testHandler(t)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Error("设置不得发送请求") }))
+	defer server.Close()
+	initial := server.URL + "/secret"
+	if err := store.SetWebhook(context.Background(), job.Topic, initial); err != nil {
+		t.Fatal(err)
+	}
+	valid := `{"webhookURL":"` + initial + `"}`
+	for _, tc := range []struct {
+		name, body, contentType, origin, site string
+		status                                int
+	}{
+		{"missing content type", valid, "", "", "", 415},
+		{"text content type", valid, "text/plain", "", "", 415},
+		{"malformed content type", valid, "application/json;bad", "", "", 415},
+		{"cross origin", valid, "application/json", "https://other.invalid", "", 403},
+		{"different port", valid, "application/json", "http://localhost:8080", "", 403},
+		{"null origin", valid, "application/json", "null", "", 403},
+		{"origin path", valid, "application/json", "http://localhost/path", "", 403},
+		{"origin credentials", valid, "application/json", "http://user:secret@localhost", "", 403},
+		{"fetch cross-site", valid, "application/json", "http://localhost", "cross-site", 403},
+		{"missing field", `{}`, "application/json", "", "", 400},
+		{"null object", `null`, "application/json", "", "", 400},
+		{"array", `[]`, "application/json", "", "", 400},
+		{"null field", `{"webhookURL":null}`, "application/json", "", "", 400},
+		{"wrong type", `{"webhookURL":123}`, "application/json", "", "", 400},
+		{"case mismatch", `{"WebhookURL":""}`, "application/json", "", "", 400},
+		{"unknown field", `{"webhookURL":"","secret":true}`, "application/json", "", "", 400},
+		{"duplicate field", `{"webhookURL":"","webhookURL":""}`, "application/json", "", "", 400},
+		{"trailing object", valid + `{}`, "application/json", "", "", 400},
+		{"trailing junk", valid + `secret`, "application/json", "", "", 400},
+		{"too large", `{"webhookURL":"` + strings.Repeat("secret", maxWebhookBody) + `"}`, "application/json", "", "", 400},
+		{"http URL", `{"webhookURL":"http://example.invalid/secret"}`, "application/json", "", "", 400},
+		{"userinfo", `{"webhookURL":"https://user:secret@example.invalid"}`, "application/json", "", "", 400},
+		{"fragment", `{"webhookURL":"` + initial + `#secret"}`, "application/json", "", "", 400},
+		{"invalid URL", `{"webhookURL":"https://example.invalid/%secret"}`, "application/json", "", "", 400},
+		{"same origin", valid, "application/json", "http://localhost", "same-origin", 200},
+		{"absent origin", valid, "application/json", "", "", 200},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest("PUT", "http://localhost/api/settings/webhook", strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", tc.contentType)
+			if tc.origin != "" {
+				req.Header.Set("Origin", tc.origin)
+			}
+			req.Header.Set("Sec-Fetch-Site", tc.site)
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			if w.Code != tc.status || w.Header().Get("Cache-Control") != "no-store" || strings.Contains(w.Body.String(), "secret") || strings.Contains(w.Body.String(), server.URL) {
+				t.Fatalf("response=%d %s", w.Code, w.Body.String())
+			}
+			if got, err := store.Webhook(context.Background(), job.Topic); err != nil || got != initial {
+				t.Fatal("无效请求改变了设置")
+			}
+		})
+	}
+	for _, origins := range [][]string{{""}, {"http://localhost", "http://localhost"}, {"http://localhost#"}} {
+		req := httptest.NewRequest("PUT", "http://localhost/api/settings/webhook", strings.NewReader(valid))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header["Origin"] = origins
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != 403 {
+			t.Fatalf("非法Origin被接受: %d", w.Code)
+		}
+	}
+	for _, method := range []string{"POST", "DELETE", "HEAD", "PATCH", "OPTIONS"} {
+		w := request(handler, method, "/api/settings/webhook", "")
+		if w.Code != 405 || w.Header().Get("Allow") != "GET, PUT" {
+			t.Fatalf("method=%s status=%d allow=%s", method, w.Code, w.Header().Get("Allow"))
+		}
+	}
+}
+
+func TestWebhookSettingsRejectReboundHost(t *testing.T) {
+	store, handler := testHandler(t)
+	ctx := context.Background()
+	const initial = "https://example.invalid/original"
+	if err := store.SetWebhook(ctx, job.Topic, initial); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		host string
+		want int
+	}{
+		{"localhost", 200}, {"localhost:8080", 200}, {"LOCALHOST:18081", 200},
+		{"127.0.0.1:8080", 200}, {"127.0.0.2:8080", 200}, {"[::1]:8080", 200}, {"[::1]", 200},
+		{"attacker.invalid:8080", 403}, {"localhost.attacker.invalid:8080", 403},
+		{"localhost.:8080", 403}, {"192.168.1.10:8080", 403}, {"0.0.0.0:8080", 403},
+		{"localhost:bad", 403}, {"localhost:65536", 403}, {"localhost:0", 403},
+	} {
+		for _, withOrigin := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/origin=%t", tc.host, withOrigin), func(t *testing.T) {
+				req := httptest.NewRequest("PUT", "/api/settings/webhook", strings.NewReader(`{"webhookURL":""}`))
+				req.Host = tc.host
+				req.Header.Set("Content-Type", "application/json")
+				req.Header.Set("Sec-Fetch-Site", "same-origin")
+				if withOrigin {
+					req.Header.Set("Origin", "http://"+tc.host)
+				}
+				if err := store.SetWebhook(ctx, job.Topic, initial); err != nil {
+					t.Fatal(err)
+				}
+				w := httptest.NewRecorder()
+				handler.ServeHTTP(w, req)
+				if w.Code != tc.want {
+					t.Fatalf("status=%d want=%d", w.Code, tc.want)
+				}
+				got, err := store.Webhook(ctx, job.Topic)
+				if err != nil || (tc.want == 403 && got != initial) || (tc.want == 200 && got != "") {
+					t.Fatal("Host 校验后的设置与预期不符")
+				}
+			})
+		}
+	}
 }
 
 func TestJSONContractAndOldArxivID(t *testing.T) {
@@ -199,6 +382,272 @@ func TestStaticIndexFollowsRebuiltAssets(t *testing.T) {
 	delete(files, "index.html")
 	if response := request(handler, "GET", "/", ""); response.Code != 503 {
 		t.Fatalf("入口缺失应明确失败：%d", response.Code)
+	}
+}
+
+func TestConfiguredTopicDirectoryAndDefaultSelection(t *testing.T) {
+	store, _ := testHandler(t)
+	const other = "another"
+	if err := store.SetWebhook(context.Background(), "historical", "https://example.invalid/history-secret"); err != nil {
+		t.Fatal(err)
+	}
+	files := fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("fixture")}}
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprint(enabled), func(t *testing.T) {
+			topics := []config.Topic{{ID: other, WebhookURL: "https://example.invalid/other-secret"}, {ID: job.Topic, WebhookURL: "https://example.invalid/ras-secret"}}
+			handler, err := New(store, files, Options{DeliveryEnabled: enabled, Topics: topics})
+			if err != nil {
+				t.Fatal(err)
+			}
+			// handler 只保留 ID 与展示字段，不持有调用方的主题或密钥切片。
+			topics[0] = config.Topic{ID: "changed", WebhookURL: "https://example.invalid/changed-secret"}
+			response := request(handler, "GET", "/api/topics", "")
+			var directory struct {
+				Items []map[string]json.RawMessage `json:"items"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &directory); err != nil {
+				t.Fatal(err)
+			}
+			if response.Code != 200 || response.Header().Get("Cache-Control") != "no-store" || len(directory.Items) != 2 || strings.Contains(response.Body.String(), "secret") || strings.Contains(response.Body.String(), "https://") || strings.Contains(response.Body.String(), "historical") {
+				t.Fatalf("directory=%d %s", response.Code, response.Body.String())
+			}
+			for i, want := range []struct {
+				id, name string
+				enabled  bool
+			}{{other, other, false}, {job.Topic, "推荐 / 广告 / 搜索", enabled}} {
+				item := directory.Items[i]
+				if len(item) != 3 || string(item["id"]) != strconv.Quote(want.id) || string(item["name"]) != strconv.Quote(want.name) || string(item["deliveryEnabled"]) != fmt.Sprint(want.enabled) {
+					t.Fatalf("topic=%s", response.Body.String())
+				}
+			}
+			response = request(handler, "GET", "/api/settings/webhook", "")
+			if response.Code != 200 || !strings.Contains(response.Body.String(), `"topic":"`+job.Topic+`"`) || !strings.Contains(response.Body.String(), `"deliveryEnabled":`+fmt.Sprint(enabled)) {
+				t.Fatalf("RAS should be the default: %d %s", response.Code, response.Body.String())
+			}
+			response = request(handler, "GET", "/api/settings/webhook?topic="+other, "")
+			if response.Code != 200 || !strings.Contains(response.Body.String(), `"topic":"another"`) || !strings.Contains(response.Body.String(), `"deliveryEnabled":false`) {
+				t.Fatalf("only RAS has an automatic worker: %d %s", response.Code, response.Body.String())
+			}
+		})
+	}
+	handler, err := New(store, files, Options{DeliveryEnabled: true, Topics: []config.Topic{{ID: other}, {ID: "third"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := request(handler, "GET", "/api/settings/webhook", "")
+	if response.Code != 200 || !strings.Contains(response.Body.String(), `"topic":"another"`) || !strings.Contains(response.Body.String(), `"deliveryEnabled":false`) {
+		t.Fatalf("first configured topic should be default: %d %s", response.Code, response.Body.String())
+	}
+	response = request(handler, "GET", "/api/papers", "")
+	if response.Code != 200 || !strings.Contains(response.Body.String(), `"items":[]`) {
+		t.Fatalf("default fell back to historical RAS data: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestEmptyConfiguredTopicDirectory(t *testing.T) {
+	store, _ := testHandler(t)
+	for _, options := range []Options{{}, {Topics: []config.Topic{}}} {
+		handler, err := New(store, fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("fixture")}}, options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response := request(handler, "GET", "/api/topics", "")
+		if response.Code != 200 || response.Body.String() != "{\"items\":[]}\n" {
+			t.Fatalf("empty directory=%d %s", response.Code, response.Body.String())
+		}
+		for _, target := range []string{"/api/papers", "/api/papers/detail?id=x&date=2026-09-29", "/api/digests", "/api/digests/2026-09-29", "/api/settings/webhook"} {
+			for _, query := range []string{"", "topic=" + job.Topic} {
+				separator := "?"
+				if strings.Contains(target, "?") {
+					separator = "&"
+				}
+				response := request(handler, "GET", target+separator+query, "")
+				if response.Code != 404 {
+					t.Fatalf("empty directory target=%s query=%s response=%d %s", target, query, response.Code, response.Body.String())
+				}
+			}
+		}
+		for _, target := range []string{"http://localhost/api/settings/webhook", "http://localhost/api/settings/webhook?topic=" + job.Topic} {
+			req := httptest.NewRequest("PUT", target, strings.NewReader(`{"webhookURL":"https://example.invalid/empty-directory-secret"}`))
+			req.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, req)
+			if response.Code != 404 {
+				t.Fatalf("empty directory PUT=%d %s", response.Code, response.Body.String())
+			}
+			if webhook, err := store.Webhook(context.Background(), job.Topic); err != nil || webhook != "" {
+				t.Fatal("empty directory allowed webhook write")
+			}
+		}
+		if response := request(handler, "GET", "/api/health", ""); response.Code != 200 {
+			t.Fatal("health must remain available without configured topics")
+		}
+	}
+}
+
+func TestBrowsingSeparatesConfiguredTopicsWithSharedDateAndPaperID(t *testing.T) {
+	store, _ := testHandler(t)
+	ctx := context.Background()
+	const date = "2026-09-29"
+	const sharedID = "arxiv:hep-th/9901001"
+	const other = "another"
+	for _, topic := range []string{other, "historical"} {
+		if _, err := store.ClaimDay(ctx, topic, date); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.SaveCandidates(ctx, topic, date, []papers.Paper{{ID: sharedID, Version: "v1", Title: topic + " title"}}); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.SaveSummary(ctx, topic, date, sharedID, digest.Summary{Text: topic + " summary", Model: "fixture-model", PromptVersion: "fixture-v1"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Ready(ctx, topic, date, topic+" message"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	handler, err := New(store, fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("fixture")}}, Options{Topics: []config.Topic{{ID: other}, {ID: job.Topic}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		topic, title, summary, message string
+		count                          int
+	}{{job.Topic, "fixture", "中文要点", "", 2}, {other, "another title", "another summary", "another message", 1}} {
+		t.Run(tc.topic, func(t *testing.T) {
+			response := request(handler, "GET", "/api/papers?topic="+tc.topic+"&date="+date, "")
+			var page state.PaperPage
+			if err := json.Unmarshal(response.Body.Bytes(), &page); err != nil {
+				t.Fatal(err)
+			}
+			if response.Code != 200 || page.Total != tc.count || len(page.Items) != tc.count || page.Items[0].ID != sharedID || page.Items[0].Title != tc.title || page.Items[0].Summary == nil || page.Items[0].Summary.Text != tc.summary {
+				t.Fatalf("paper list=%d %s", response.Code, response.Body.String())
+			}
+			response = request(handler, "GET", "/api/papers/detail?topic="+tc.topic+"&id=arxiv%3Ahep-th%2F9901001&date="+date, "")
+			var paper state.PaperRecord
+			if err := json.Unmarshal(response.Body.Bytes(), &paper); err != nil {
+				t.Fatal(err)
+			}
+			if response.Code != 200 || paper.Title != tc.title || paper.Summary == nil || paper.Summary.Text != tc.summary {
+				t.Fatalf("paper detail=%d %s", response.Code, response.Body.String())
+			}
+			response = request(handler, "GET", "/api/digests?topic="+tc.topic, "")
+			var history state.DigestPage
+			if err := json.Unmarshal(response.Body.Bytes(), &history); err != nil {
+				t.Fatal(err)
+			}
+			if response.Code != 200 || history.Total != 1 || len(history.Items) != 1 || history.Items[0].Date != date || history.Items[0].PaperCount != tc.count || history.Items[0].SummaryCount != 1 {
+				t.Fatalf("digest list=%d %s", response.Code, response.Body.String())
+			}
+			response = request(handler, "GET", "/api/digests/"+date+"?topic="+tc.topic, "")
+			var detail state.DigestDetail
+			if err := json.Unmarshal(response.Body.Bytes(), &detail); err != nil {
+				t.Fatal(err)
+			}
+			if response.Code != 200 || detail.Message != tc.message || detail.PaperCount != tc.count || len(detail.Items) != tc.count || detail.Items[0].Title != tc.title || detail.Items[0].Summary == nil || detail.Items[0].Summary.Text != tc.summary {
+				t.Fatalf("digest detail=%d %s", response.Code, response.Body.String())
+			}
+		})
+	}
+	if response := request(handler, "GET", "/api/papers/detail?topic=another&id=missing&date="+date, ""); response.Code != 404 {
+		t.Fatalf("paper existing only in RAS leaked into another: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestTopicQueryValidationRejectsUnknownHistoricalAndMalformedTopics(t *testing.T) {
+	store, _ := testHandler(t)
+	ctx := context.Background()
+	for _, topic := range []string{job.Topic, "another", "historical"} {
+		if err := store.SetWebhook(ctx, topic, "https://example.invalid/"+topic+"-secret"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	handler, err := New(store, fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("fixture")}}, Options{Topics: []config.Topic{{ID: job.Topic}, {ID: "another"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, endpoint := range []struct{ method, target string }{
+		{"GET", "/api/papers"}, {"GET", "/api/papers/detail?id=arxiv%3Ahep-th%2F9901001&date=2026-09-29"},
+		{"GET", "/api/digests"}, {"GET", "/api/digests/2026-09-29"}, {"GET", "/api/settings/webhook"}, {"PUT", "/api/settings/webhook"},
+	} {
+		for _, tc := range []struct {
+			query string
+			code  int
+		}{
+			{"topic=", 400}, {"topic", 400}, {"topic=%20%09", 400}, {"topic=another&topic=another", 400}, {"topic=&topic=" + job.Topic, 400}, {"topic=" + job.Topic + "&topic=another", 400},
+			{"topic=unknown", 404}, {"topic=historical", 404}, {"topic=%20another%20", 404}, {"topic=%zz", 400}, {"topic=another&bad=%zz", 400},
+		} {
+			t.Run(endpoint.method+endpoint.target+"/"+tc.query, func(t *testing.T) {
+				separator := "?"
+				if strings.Contains(endpoint.target, "?") {
+					separator = "&"
+				}
+				req := httptest.NewRequest(endpoint.method, "http://localhost"+endpoint.target+separator+tc.query, strings.NewReader(`{"webhookURL":""}`))
+				req.Header.Set("Content-Type", "application/json")
+				response := httptest.NewRecorder()
+				handler.ServeHTTP(response, req)
+				if response.Code != tc.code || response.Header().Get("Cache-Control") != "no-store" || strings.Contains(response.Body.String(), "secret") {
+					t.Fatalf("response=%d %s", response.Code, response.Body.String())
+				}
+				for _, topic := range []string{job.Topic, "another", "historical", "unknown"} {
+					want := "https://example.invalid/" + topic + "-secret"
+					if topic == "unknown" {
+						want = ""
+					}
+					if got, err := store.Webhook(ctx, topic); err != nil || got != want {
+						t.Fatalf("invalid query altered webhook for %s", topic)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestWebhookSettingsWriteAndClearOnlySelectedTopic(t *testing.T) {
+	store, _ := testHandler(t)
+	handler, err := New(store, fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("fixture")}}, Options{DeliveryEnabled: true, Topics: []config.Topic{{ID: "another"}, {ID: job.Topic}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	urls := map[string]string{job.Topic: "https://example.invalid/ras-secret", "another": "https://example.invalid/other-secret"}
+	put := func(topic, value string, enabled bool) {
+		t.Helper()
+		body, err := json.Marshal(map[string]string{"webhookURL": value})
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequest("PUT", "http://localhost/api/settings/webhook?topic="+topic, strings.NewReader(string(body)))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Origin", "http://localhost")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, req)
+		want := fmt.Sprintf("{\"topic\":%q,\"configured\":%t,\"deliveryEnabled\":%t}\n", topic, value != "", enabled)
+		if response.Code != 200 || response.Body.String() != want || strings.Contains(response.Body.String(), "secret") {
+			t.Fatalf("PUT response=%d %s want=%s", response.Code, response.Body.String(), want)
+		}
+		response = request(handler, "GET", "/api/settings/webhook?topic="+topic, "")
+		if response.Code != 200 || response.Body.String() != want {
+			t.Fatalf("GET response=%d %s want=%s", response.Code, response.Body.String(), want)
+		}
+	}
+	put(job.Topic, urls[job.Topic], true)
+	put("another", urls["another"], false)
+	for _, cleared := range []string{job.Topic, "another"} {
+		for topic, value := range urls {
+			if err := store.SetWebhook(ctx, topic, value); err != nil {
+				t.Fatal(err)
+			}
+		}
+		put(cleared, "", cleared == job.Topic)
+		for topic, value := range urls {
+			want := value
+			if topic == cleared {
+				want = ""
+			}
+			if got, err := store.Webhook(ctx, topic); err != nil || got != want {
+				t.Fatalf("clearing %s affected %s", cleared, topic)
+			}
+		}
 	}
 }
 

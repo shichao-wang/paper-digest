@@ -25,6 +25,16 @@
 
 上述修改完成后，`go test ./...`、`go test -race -timeout 120s ./...`、`go vet ./...` 和 `git diff --check` 均通过。修复过程中曾因并行开发尚未补全目录同步函数产生暂时编译失败，补全后已完成统一复测。本轮未改前端源码，未运行真实模型或生产部署。
 
+## main 内容整合验收（2026-10-02）
+
+基于已抓取的 `origin/main`（`44258cb`）完成非受保护源码的三方内容整合。保留版本论文库、统一 Chat 客户端和独立流水线 worker，同时接入主分支的 SQLite Webhook 配置、旧日报主题隔离和管理页面。新库 URL 的 `topic` 继续表示研究主题；旧日报使用 `digestTopic` 保存配置主题 ID，旧链接兼容转换，旧 API 显式传递配置主题。
+
+整合后 `go test ./...`、`go test -race -timeout 120s ./...`、`go vet ./...`、`npm --prefix web run build`、`docker compose config --quiet` 和 `git diff --check` 通过。后端回归覆盖主题隔离、未知主题拒绝、Webhook 首次迁移与清除不复活、设置输入及同源约束、数据库和备份权限、缺少 Webhook 时不发送，以及新版库服务生命周期。
+
+浏览器使用独立 `paper-library-preview`（`http://localhost:18081`），无密钥、无 Webhook，三个自动开关关闭。默认版本库、研究主题筛选与 v10 详情请求均为 200；中文总结、版本比较保留，链路诊断段落不存在；展开 v10 与 v9 原文时，证据请求分别携带对应版本并均返回 200。日报主题管理、推送配置、旧 `paperDate=2026-09-28` 快照深链及旧主题参数转换通过。管理页在 375×812 下无横向溢出，随后恢复桌面 viewport。没有保存 Webhook 或发送消息。测试曾请求不存在的 `2026-10-01` 快照，返回预期 404 并留下一条历史控制台错误；改用演示库实际日期后请求成功，最终版本库请求与服务日志正常。
+
+这是内容整合验收，不代表 Git merge 已完成。桌面应用因尚未确认仓库 origin，拒绝合入受保护的 `.claude/launch.json`；该文件保持原样。实际合并及 PR 冲突消除仍须在 origin 确认后完成。
+
 ## 总体检查
 
 以下检查最终均成功退出：
@@ -142,4 +152,4 @@ go run ./cmd/paper-digest restore-library data/web-preview/archive-check data/we
 - 生产部署和生产数据迁移／完整备份需单独执行；当前生产仍使用此前镜像，本轮没有修改实际配置。
 - 定时推送和用户主动请求的时间、篇数、排序、入口与交互按下一轮需求设计。
 
-本轮没有提交、推送或创建 PR。源码与验收文档保留在当前开发 worktree，可直接审阅。
+实现与八项审阅修复已提交、推送至 [PR 7](https://github.com/shichao-wang/paper-digest/pull/7)，Auto-fix 已开启。后续 main 内容整合的验收与实际 Git 合并状态见本文对应记录。

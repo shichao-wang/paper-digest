@@ -35,7 +35,7 @@ docker compose exec paper-digest paper-digest status
 
 启动 Compose 后打开 http://127.0.0.1:8080。新库按版本独立显示，支持搜索、主题筛选，以及精选／全部论文切换。详情显示总结、研究、实验、业务应用、版本比较与证据，原文按需展开。筛选理由、原文质量、任务与运行记录保存在后台，不占用阅读页面。页面只读，不提供重生成或发送操作。
 
-「旧摘要库／日报历史」继续保存旧每日最多5篇的结果和当天摘要；旧 `paper+paperDate` 深链保持当天版本，不将摘要标为全文。空库不会自动填充示例或抓取历史论文。
+「日报精选快照／日报历史」继续保存旧每日最多5篇的结果和当天摘要，按配置主题隔离浏览；旧 `paper+paperDate` 深链保持当天版本，不将摘要标为全文。「日报主题管理」提供已登记主题及推送配置入口。空库不会自动填充示例或抓取历史论文。
 
 前端位于 `web/`，使用 React、TypeScript 和 Vite；Docker 自动构建静态资源，由 Go 同源托管。运行时不需要 Node。直接在宿主机开发需要 Node 24 和 Go 1.27：
 
@@ -75,32 +75,39 @@ go run ./cmd/paper-digest --config data/web-preview/config.json serve
 
 ## 主题与机器人配置
 
-`config/config.example.json` 是可提交的示例，`config/config.json` 是 **Git 和 Docker 构建都忽略的实际配置**；后者通过 Compose 只读挂载到容器，不在镜像中。请在启动 Compose **之前**创建该文件，且仅在实际配置中填写密钥。当前 `recommendation-advertising-search` 是 Recommendation／Advertising／Search 联合主题，其 `webhook_url` 是对应群机器人的 HTTPS Webhook。
+`config/config.example.json` 是可提交的示例，`config/config.json` 是 **Git 和 Docker 构建都忽略的实际配置**；后者通过 Compose 只读挂载到容器，不在镜像中。请在启动 Compose **之前**创建该文件，且仅在实际配置中填写模型密钥。当前 `recommendation-advertising-search` 是 Recommendation／Advertising／Search 联合主题。
+
+飞书群机器人 Webhook 在「主题管理」中配置，点击目标主题所在行的「编辑推送配置」。每个主题独立保存地址；保存、替换或清除一个主题不会修改其他主题。地址保存在 SQLite 数据卷中，推送每次读取当前配置，无需重启容器；已保存的地址不回显。清除配置经过确认后暂停当前主题推送，重新配置后恢复。保存和清除不会发送群消息，也不会补发历史日报。
+
+页面没有登录功能，设置写入仅接受 `localhost` 或回环 IP 的 Host，请从本机地址打开设置。代理需保留原始 Host；域名入口不能用于修改 Webhook，对外开放阅读页面时仍需配置访问控制。
+
+已有 JSON 中的 `topics[].webhook_url` 仍兼容：`serve` 和已确认的 `send-test` 首次打开数据库时，将合法的旧地址迁入数据库，已有页面配置不会被覆盖，已清除的地址也不会复活。迁移后可从实际 JSON 中移除 `webhook_url`。数据库与备份包含 Webhook 密钥，应按凭据保管。数据库、已有 WAL/SHM 与备份以 `0600` 保管；无法收紧权限时会报错停止操作。
 
 配置文件还包含 `database.path`（保持 `/data/digest.db`，对应现有数据卷）、`delivery.enabled`、`anthropic.api_key`、`anthropic.model`、可选的 `anthropic.base_url` 和 `arxiv.lookback_days`（1～30 天）。`anthropic` 是保留的配置兼容名称，当前业务请求统一采用 Chat Completions；程序只使用配置中的密钥和地址，不读取旧环境变量。直接运行 CLI 时默认读取工作目录下的 `config/config.json`，如需其他路径可在子命令前指定 `--config <文件>`。`health` 和 `preview` 不读取该文件。
 
 默认模型为 `deepseek-flash`，默认地址为 `https://api.deepseek.com/v1`，请求 `POST /v1/chat/completions`。旧 Anthropic 型号与空地址组合会在请求前拒绝，不能把旧凭据解释为 DeepSeek 密钥；迁移需明确设置 DeepSeek 型号与对应密钥，或显式配置兼容 Chat 网关地址。已有官方 `https://api.deepseek.com/anthropic` 配置可在内存中转换为同一官方 Chat 地址，实际文件无需改名。使用其他兼容 Chat 网关时，配置根地址或 `/v1` 地址及相应密钥、模型；任意网关的 `/anthropic` 路径不会自动改写。宿主机可用 `http://127.0.0.1:3425`；Docker Desktop 容器用 `http://host.docker.internal:3425`。客户端关闭思考和流式输出，没有自动重试；仅接受正常完成且非空的正文。配置后仍保持 `delivery.enabled=false`，直至完成飞书试发和投递确认。
 
-从旧 `.env` 迁移时，将 `ARXIV_LOOKBACK_DAYS`、`ENABLE_DELIVERY` 填入上述 JSON 字段；模型配置需明确选择服务：使用 DeepSeek 官方时填写对应的 DeepSeek 密钥与型号，使用兼容 Chat 网关时显式填写其地址、密钥与型号。不能只把旧 `ANTHROPIC_API_KEY` 和 Claude 型号复制到空地址配置当作已完成迁移；官方地址也会在请求前拒绝明显的 `sk-ant-*` 密钥。将 `FEISHU_WEBHOOK_RAS`（旧版可能为 `FEISHU_WEBHOOK_URL`）填入相应主题的 `webhook_url`。不要把 URL 或 API key 粘贴进示例配置或提交到 Git。旧 `.env` 不再被使用，若本机存在请自行安全处理。修改实际配置后用 `docker compose up -d --force-recreate paper-digest` 重建容器以重新挂载配置（不重建镜像、不删除数据卷）；代码或 Compose 变更才需要重建镜像。
+从旧 `.env` 迁移时，将 `ARXIV_LOOKBACK_DAYS`、`ENABLE_DELIVERY` 填入上述 JSON 字段；模型配置需明确选择服务：使用 DeepSeek 官方时填写对应的 DeepSeek 密钥与型号，使用兼容 Chat 网关时显式填写其地址、密钥与型号。不能只把旧 `ANTHROPIC_API_KEY` 和 Claude 型号复制到空地址配置当作已完成迁移；官方地址也会在请求前拒绝明显的 `sk-ant-*` 密钥。将 `FEISHU_WEBHOOK_RAS`（旧版可能为 `FEISHU_WEBHOOK_URL`）的地址填入页面「主题管理」中对应主题的推送配置。不要把 URL 或 API key 粘贴进示例配置或提交到 Git。旧 `.env` 不再被使用，若本机存在请自行安全处理。修改实际 JSON 配置后用 `docker compose up -d --force-recreate paper-digest` 重建容器以重新挂载配置（不重建镜像、不删除数据卷）；页面修改 Webhook 无需重建。代码或 Compose 变更才需要重建镜像。
 
-可以预先添加其他主题的机器人 URL 并对其受控试发，但**新增主题不会启动该主题的日报**：目前只运行上述联合主题；新主题还需另行实现论文抓取、筛选、渲染和调度。
+「主题管理」展示 `topics[].id` 中登记的主题及 Webhook、自动任务状态。旧摘要阅读和设置接口通过 `?topic=<主题 ID>` 明确主题，未知主题返回错误；省略参数时优先联合主题，否则使用配置中的第一个主题。`GET /api/topics` 仅返回主题 ID、显示名称和自动运行状态，不含地址。新版本库的主题筛选是论文内容的推荐／广告／搜索标签，与旧日报配置主题 ID 分开。
+
+自动日报目前仍只支持 `recommendation-advertising-search` 联合主题；登记其他主题或保存其 Webhook 不会启动该主题的自动任务。其他已登记主题可浏览已有摘要数据，或用 `send-test --topic <主题 ID> --confirm` 受控试发。新论文库采集和处理继续由 `library` 的独立开关控制。
 
 ## 受控飞书试发
 
-先在飞书确认目标群和群机器人身份，将联合主题机器人的 HTTPS Webhook 填入 `config/config.json` 对应主题的 `webhook_url`，**保持 `delivery.enabled=false`**。本命令不需要模型密钥、不读数据库、不抓论文；只发送以下固定文本：
+先在飞书确认目标群和群机器人身份，将联合主题机器人的 HTTPS Webhook 保存到「主题管理」中联合主题的推送配置，**保持 `delivery.enabled=false`**。本命令不需要模型密钥、不抓论文，读取数据库中保存的当前地址，只发送以下固定文本：
 
 > 【论文日报机器人连通性测试】这是一条人工触发的测试消息，不是正式论文日报；未调用模型，也未整理真实论文。
 
 确认群、身份和以上内容后，在容器已运行的情况下执行：
 
 ```bash
-docker compose up -d --force-recreate paper-digest  # 配置更新后重新挂载文件
 docker compose exec -T paper-digest paper-digest send-test --topic recommendation-advertising-search --confirm
 ```
 
 此命令会产生**一条真实群消息**，但不会启动日报任务；不用在命令行粘贴 Webhook。只有飞书明确返回成功码才报告请求已被接受，仍须在目标群核对。试发未确认（超时、断网或异常响应）时，先到群里核对，**不要盲目再次执行**；该人工试发不写入 SQLite，也不影响日报状态。
 
-仅当 `config/config.json` 中的 `anthropic.api_key`、当前主题的 `webhook_url` 均就绪，且已核对试发对象与内容，才将 `delivery.enabled` 改为 `true` 并重新创建容器。缺少凭据时保持禁用，不能把它视为已上线。真实调用模型会产生费用。Webhook URL 包含密钥，实际配置、数据库与备份不能提交或公开。
+仅当 `config/config.json` 中的 `anthropic.api_key` 与页面中的 Webhook 均就绪，且已核对试发对象与内容，才将 `delivery.enabled` 改为 `true` 并重新创建容器。开启旧日报自动运行需要模型密钥，且 `topics` 必须登记 `recommendation-advertising-search`；缺少 Webhook 时仍可生成日报，但不执行推送，窗口结束后记为 `missed`，不会自动补发。真实调用模型会产生费用。Webhook URL 包含密钥，实际配置、数据库与备份不能提交或公开。
 
 ## 旧日报运行语义
 
@@ -121,7 +128,7 @@ docker compose cp paper-digest:/data/digest-backup.db ./digest-backup.db
 
 旧 `backup` 命令只含数据库，无法恢复全文文件。新库使用 `backup-library <未存在目录>` 和 `restore-library <备份目录> <未存在恢复目录>`；快照后按数据库文件引用复制与核 hash，恢复不启动任务，详见 [完整备份恢复](docs/library-pipeline.md#备份恢复)。
 
-备份文件可能包含论文摘要和发送历史，不要上传至公开仓库。恢复演练应在隔离目录或卷中进行，避免覆盖唯一副本。首次迁移旧库前程序自动生成不覆盖的一致性快照；仍应保留前一个镜像和完整备份以便回滚。
+备份文件包含论文内容、发送历史和已保存的 Webhook 密钥，不要上传至公开仓库。恢复演练应在隔离目录或卷中进行，避免覆盖唯一副本。首次迁移旧库前程序自动生成不覆盖的一致性快照；仍应保留前一个镜像和完整备份以便回滚。
 
 ## 新流程前置验证
 
@@ -150,7 +157,7 @@ docker compose cp paper-digest:/data/digest-backup.db ./digest-backup.db
 - `internal/state/`：SQLite 事务、逐篇恢复、发送意图与历史去重。
 - `internal/job/`：北京时间调度与任务执行。
 - `internal/delivery/`：飞书群机器人 Webhook 发送和响应判定。
-- `internal/web/`：只读论文与日报 API、HTTP 健康检查和静态资源服务。
-- `web/`：论文库、详情阅读和日报历史的 React 页面。
+- `internal/web/`：只读论文与日报 API、主题及 Webhook 设置 API、HTTP 健康检查和静态资源服务。
+- `web/`：版本论文库、详情阅读、旧摘要／日报历史与主题管理的 React 页面。
 
 本项目是 `repos/` 下的独立 Git 仓库；请始终在本目录内操作 Git，不要将其内容加入 `personal-workspace` 主仓库历史。创建公开远端仓库和推送由所有者另行决定。

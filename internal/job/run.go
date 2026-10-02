@@ -98,6 +98,17 @@ func (r *Runner) Deliver(ctx context.Context, date string) error {
 	if r.Sender == nil {
 		return errors.New("发送未启用")
 	}
+	sender := r.Sender
+	if preparer, ok := sender.(delivery.Preparer); ok {
+		prepared, err := preparer.Prepare(ctx)
+		if err != nil {
+			return err
+		}
+		if prepared == nil {
+			return errors.New("发送未启用")
+		}
+		sender = prepared
+	}
 	claimed, err := r.Store.ClaimSend(ctx, Topic, date)
 	if err != nil {
 		return err
@@ -109,7 +120,7 @@ func (r *Runner) Deliver(ctx context.Context, date string) error {
 	if err != nil {
 		return err
 	}
-	if err := r.Sender.Send(ctx, current.Message); err != nil {
+	if err := sender.Send(ctx, current.Message); err != nil {
 		writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
 		if markErr := r.Store.MarkUnknown(writeCtx, Topic, date); markErr != nil {

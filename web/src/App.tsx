@@ -4,6 +4,6 @@ import LibraryApp from './LibraryApp'
 
 export default function App() {
   const { params } = useLocation()
-  const legacy = params.has('paperDate') || ['digests', 'legacy'].includes(params.get('view') || '')
+  const legacy = params.has('paperDate') || ['digests', 'legacy', 'topics', 'settings'].includes(params.get('view') || '')
   return legacy ? <LegacyApp /> : <LibraryApp />
 }
