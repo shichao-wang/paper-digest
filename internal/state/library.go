@@ -48,6 +48,20 @@ func (s *Store) GetVersion(ctx context.Context, id library.Identity) (library.Ve
 
 // 更新同一来源版本的元信息时保留首次采集、公告来源及已有响应快照。
 func mergeVersion(old, v library.Version) library.Version {
+	if old.MetadataVerified && !v.MetadataVerified {
+		// 未验证公告只补来源，不改变已核实的精确版本字段（包括明确缺失项）。
+		old.MetadataArtifacts = mergeArtifacts(old.MetadataArtifacts, v.MetadataArtifacts)
+		if old.Origin == "" {
+			old.Origin = v.Origin
+		}
+		if old.AnnouncementDate == "" {
+			old.AnnouncementDate = v.AnnouncementDate
+		}
+		if old.CapturedAt == "" {
+			old.CapturedAt = v.CapturedAt
+		}
+		return old
+	}
 	if old.Origin != "" {
 		v.Origin = old.Origin
 	}
@@ -151,6 +165,7 @@ func (s *Store) SaveCategoryBatch(ctx context.Context, b library.CategoryBatch) 
 		return err
 	}
 	defer tx.Rollback()
+	snapshot := b
 	var previousRaw []byte
 	err = tx.QueryRowContext(ctx, `SELECT data FROM library_batches WHERE category=? AND date=?`, b.Category, b.Date).Scan(&previousRaw)
 	if err == nil {
@@ -158,11 +173,19 @@ func (s *Store) SaveCategoryBatch(ctx context.Context, b library.CategoryBatch) 
 		if err := json.Unmarshal(previousRaw, &previous); err != nil {
 			return err
 		}
-		b.Artifacts = mergeArtifacts(previous.Artifacts, b.Artifacts)
+		// 完整批次不被后续失败观察降级；先留档原始输入，避免合并依赖影响观察去重。
+		// 候选、公告关联与任务仍按本次输入保存，响应依赖继续累计。
+		if previous.Completeness == "complete" && b.Completeness != "complete" {
+			if err := saveSourceObservation(ctx, tx, b); err != nil {
+				return err
+			}
+			snapshot = previous
+		}
+		snapshot.Artifacts = mergeArtifacts(previous.Artifacts, b.Artifacts)
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	raw, err := json.Marshal(b)
+	raw, err := json.Marshal(snapshot)
 	if err != nil {
 		return err
 	}
@@ -251,12 +274,7 @@ func sourceObservationID(b library.CategoryBatch) (string, error) {
 	return hex.EncodeToString(hash[:]), nil
 }
 
-// SaveSourceObservation 保存公告日期未核实的采集快照和候选，不创建公告或日期；相同响应内容幂等。
-func (s *Store) SaveSourceObservation(ctx context.Context, b library.CategoryBatch) error {
-	if strings.TrimSpace(b.Category) == "" || b.Date != "" {
-		return library.ErrInvalid
-	}
-	b.Completeness = "incomplete"
+func saveSourceObservation(ctx context.Context, tx *sql.Tx, b library.CategoryBatch) error {
 	raw, err := json.Marshal(b)
 	if err != nil {
 		return err
@@ -265,12 +283,22 @@ func (s *Store) SaveSourceObservation(ctx context.Context, b library.CategoryBat
 	if err != nil {
 		return err
 	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO library_source_observations(id,category,captured_at,data) VALUES(?,?,?,?) ON CONFLICT DO NOTHING`, id, b.Category, b.CapturedAt, raw)
+	return err
+}
+
+// SaveSourceObservation 保存公告日期未核实的采集快照和候选，不创建公告或日期；相同响应内容幂等。
+func (s *Store) SaveSourceObservation(ctx context.Context, b library.CategoryBatch) error {
+	if strings.TrimSpace(b.Category) == "" || b.Date != "" {
+		return library.ErrInvalid
+	}
+	b.Completeness = "incomplete"
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `INSERT INTO library_source_observations(id,category,captured_at,data) VALUES(?,?,?,?) ON CONFLICT DO NOTHING`, id, b.Category, b.CapturedAt, raw); err != nil {
+	if err := saveSourceObservation(ctx, tx, b); err != nil {
 		return err
 	}
 	for _, v := range b.Versions {

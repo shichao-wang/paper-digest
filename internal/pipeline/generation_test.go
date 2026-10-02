@@ -131,18 +131,14 @@ func TestCompareBindsExactGenerationBeforeModelAndPreservesVisibleResults(t *tes
 	if err := r.Store.RetryTask(ctx, oldTask.ID); err != nil {
 		t.Fatal(err)
 	}
-	oldTask = generationClaim(t, r, "compare")
+	if task, err := r.Store.ClaimTask(ctx, "compare", pipelineTestNow, time.Minute); !errors.Is(err, library.ErrNotFound) {
+		t.Fatalf("superseded retry claimed=%+v err=%v", task, err)
+	}
+	bound, err := r.Store.TaskDocument(ctx, oldTask, previous)
+	if err != nil || bound.Identity != previous || docs.ensures[previous.Key()] != ensures || source.metadataCalls[previous.Key()] != calls {
+		t.Fatalf("superseded retry lost fixed reference=%+v err=%v", bound, err)
+	}
 	analyzer.pause = false
-	c, err := r.stage(ctx, oldTask)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.Comparison.AnalysisID != oldID || analyzer.hashes[1][0] != "old-text" || docs.ensures[previous.Key()] != ensures || source.metadataCalls[previous.Key()] != calls {
-		t.Fatalf("retry rebound inputs comparison=%+v hashes=%v", c.Comparison, analyzer.hashes)
-	}
-	if err := r.Store.CompleteTask(ctx, oldTask, c, pipelineTestNow); err != nil {
-		t.Fatal(err)
-	}
 	detail := pipelineDetail(t, r, id)
 	if detail.AnalysisID != newID || detail.Comparison.AnalysisID != newID || detail.Comparison.Status != "pending" {
 		t.Fatalf("old comparison replaced new visible result=%+v", detail)
@@ -151,11 +147,11 @@ func TestCompareBindsExactGenerationBeforeModelAndPreservesVisibleResults(t *tes
 		t.Fatal(err)
 	}
 	newCompare := generationClaim(t, r, "compare")
-	c, err = r.stage(ctx, newCompare)
+	c, err := r.stage(ctx, newCompare)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Comparison.AnalysisID != newID || analyzer.hashes[2][0] != "new-text" {
+	if c.Comparison.AnalysisID != newID || analyzer.hashes[1][0] != "new-text" {
 		t.Fatalf("new model binding=%+v hashes=%v", c.Comparison, analyzer.hashes)
 	}
 	if err := r.Store.CompleteTask(ctx, newCompare, c, pipelineTestNow); err != nil {
@@ -280,11 +276,11 @@ func TestAnalyzeReusesEarlierDocumentAndRejectsFutureGeneration(t *testing.T) {
 		t.Fatal(err)
 	}
 	earlier := generationDocument(t, r, id, 0, "earlier")
-	generationDocument(t, r, id, 2, "future")
 	if err := r.Store.EnqueueTask(ctx, id, "analyze", 1); err != nil {
 		t.Fatal(err)
 	}
 	task := generationClaim(t, r, "analyze")
+	generationDocument(t, r, id, 2, "future")
 	c, err := r.stage(ctx, task)
 	if err != nil {
 		t.Fatal(err)
@@ -302,11 +298,11 @@ func TestAnalyzeReusesEarlierDocumentAndRejectsFutureGeneration(t *testing.T) {
 	if err := r.Store.UpsertVersion(ctx, pipelineVersion(other)); err != nil {
 		t.Fatal(err)
 	}
-	generationDocument(t, r, other, 2, "only-future")
 	if err := r.Store.EnqueueTask(ctx, other, "analyze", 1); err != nil {
 		t.Fatal(err)
 	}
 	task = generationClaim(t, r, "analyze")
+	generationDocument(t, r, other, 2, "only-future")
 	if _, err := r.stage(ctx, task); !errors.Is(err, library.ErrNotFound) {
 		t.Fatalf("future-only document accepted=%v", err)
 	}

@@ -246,6 +246,115 @@ func TestEvidenceAndNumericContextValidation(t *testing.T) {
 	}
 }
 
+func TestNumericResultRequiresEntireTrimmedValue(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		valid bool
+	}{
+		{"integer", "9", true},
+		{"zero", "0", true},
+		{"positive", "+9", true},
+		{"negative", "-9", true},
+		{"decimal", "0.9", true},
+		{"signed decimal", "-0.9", true},
+		{"comma separator", "1,234", true},
+		{"mixed separators", "1,234.56", true},
+		{"exponent", "9e3", true},
+		{"positive exponent", "+9E+3", true},
+		{"negative exponent", "-0.9e-3", true},
+		{"trimmed whitespace", " \t0.9\r\n", true},
+		{"multiple values", "0.9 and 0.8", false},
+		{"multiple lines", "0.9\n0.8", false},
+		{"qualifier", "approximately 0.9", false},
+		{"suffix qualifier", "0.9 approximately", false},
+		{"inequality", "<0.9", false},
+		{"uncertainty", "0.9 ± 0.8", false},
+		{"units", "0.9 ms", false},
+		{"percent", "90%", false},
+		{"embedded unit", "0.9ms", false},
+		{"incomplete exponent", "0.9e", false},
+		{"incomplete signed exponent", "0.9e+", false},
+		{"multiple signs", "--0.9", false},
+		{"leading decimal point", ".9", false},
+		{"trailing decimal point", "9.", false},
+		{"internal whitespace", "0. 9", false},
+		{"empty", "", false},
+		{"whitespace", " \t\r\n", false},
+		{"null string", "null", false},
+		{"unknown", "unknown", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// 引文逐字包含 value，且通过文档 hash/range 校验，不能靠 grounding 偶然拒绝非法值。
+			d := document(1, "NDCG "+tt.value+" on Dataset-X by Method-A against Baseline-B unit-score")
+			c := chunkFor(d, d.Blocks[0])
+			g := grounding{docs: map[string]library.Document{d.ID: d}, read: map[string]bool{blockKey(d, d.Blocks[0]): true}}
+			ev, err := g.evidence(c.Evidence)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ptr := func(s string) *string { return &s }
+			r := library.NumericResult{Metric: "NDCG", Value: tt.value, Dataset: ptr("Dataset-X"), Method: ptr("Method-A"), Baseline: ptr("Baseline-B"), Unit: ptr("unit-score"), EvidenceIDs: []string{c.Evidence[0].ID}}
+			err = numeric(r, ev)
+			if tt.valid {
+				if err != nil {
+					t.Fatalf("valid numeric value %q rejected: %v", tt.value, err)
+				}
+			} else if !errors.Is(err, ErrValidation) {
+				t.Fatalf("invalid numeric value %q: expected ErrValidation, got %v", tt.value, err)
+			}
+		})
+	}
+}
+
+func TestNumericResultValueNullAndOptionalContext(t *testing.T) {
+	d := document(1, "NDCG 0.9")
+	c := chunkFor(d, d.Blocks[0])
+	r := library.NumericResult{Metric: "NDCG", Value: "0.9", EvidenceIDs: []string{c.Evidence[0].ID}}
+	data, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out library.NumericResult
+	if err = decode(data, &out); err != nil {
+		t.Fatalf("null optional context rejected: %v", err)
+	}
+	if err = numeric(out, map[string]library.Evidence{c.Evidence[0].ID: c.Evidence[0]}); err != nil {
+		t.Fatalf("numeric result with unavailable optional context rejected: %v", err)
+	}
+	var raw map[string]json.RawMessage
+	if err = json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	raw["value"] = json.RawMessage("null")
+	data, err = json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = decode(data, &out); !errors.Is(err, ErrValidation) {
+		t.Fatalf("null required value: expected ErrValidation, got %v", err)
+	}
+}
+
+func TestNumericResultRetainsQuoteGrounding(t *testing.T) {
+	for _, quote := range []string{
+		"NDCG 0.99",
+		"NDCG 0.8 and Precision 0.9",
+		"NDCG is the chosen metric. Precision 0.9",
+		"Precision 0.9",
+	} {
+		t.Run(quote, func(t *testing.T) {
+			d := document(1, quote)
+			c := chunkFor(d, d.Blocks[0])
+			err := numeric(library.NumericResult{Metric: "NDCG", Value: "0.9", EvidenceIDs: []string{c.Evidence[0].ID}}, map[string]library.Evidence{c.Evidence[0].ID: c.Evidence[0]})
+			if !errors.Is(err, ErrValidation) {
+				t.Fatalf("ungrounded numeric value accepted: %v", err)
+			}
+		})
+	}
+}
+
 func TestBudgetPauseAndRestartNeverReplenishes(t *testing.T) {
 	calls := 0
 	e := fakeEngine(t, func(w wireRequest) (*http.Response, error) {

@@ -166,6 +166,7 @@ func missing(fields []string) error {
 func normalize(s string) string { return strings.ToLower(strings.Join(strings.Fields(s), " ")) }
 
 var number = regexp.MustCompile(`[-+]?\d+(?:[.,]\d+)*(?:[eE][-+]?\d+)?`)
+var numericValue = regexp.MustCompile(`^(?:` + number.String() + `)$`)
 var contextBoundary = regexp.MustCompile(`(?:[.!?](?:[ \t]+|\n)|\n[ \t]*\n)`)
 
 func containsValue(text, value string) bool {
@@ -237,7 +238,7 @@ func metricValueContext(text, metric, value string) bool {
 	return false
 }
 func numeric(r library.NumericResult, ev map[string]library.Evidence) error {
-	if strings.TrimSpace(r.Metric) == "" || strings.TrimSpace(r.Value) == "" || !number.MatchString(r.Value) {
+	if strings.TrimSpace(r.Metric) == "" || !numericValue.MatchString(strings.TrimSpace(r.Value)) {
 		return fmt.Errorf("%w: numeric result requires metric and numeric value", ErrValidation)
 	}
 	if err := validateRefs(r.EvidenceIDs, ev, true); err != nil {

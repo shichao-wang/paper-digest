@@ -174,7 +174,7 @@ func TestRetryPreservesCheckpointAndReanalyzeCreatesNewGeneration(t *testing.T) 
 		t.Fatalf("detail=%+v err=%v", detail, err)
 	}
 	newTask := detail.Tasks[0]
-	if newTask.Stage != "relevance" || newTask.Generation != 5 || newTask.Status != "queued" || len(newTask.Checkpoint) != 0 {
+	if newTask.Stage != "metadata" || newTask.Generation != 5 || newTask.Status != "queued" || len(newTask.Checkpoint) != 0 {
 		t.Fatalf("new task=%+v", newTask)
 	}
 	if err := runLibraryCommand(ctx, cfg, []string{"reanalyze", "2501.12345", "v1"}); !errors.Is(err, library.ErrNotFound) {

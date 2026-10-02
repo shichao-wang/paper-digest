@@ -6,6 +6,8 @@ services:
     command: ["serve", "--listen", ":8080", "--web-dir", "/app/web/dist"]
     ports:
       - "127.0.0.1:8080:8080"
+    environment:
+      PAPER_DIGEST_SETTINGS_TOKEN: "${PAPER_DIGEST_SETTINGS_TOKEN:-}"
     volumes:
       - digest-data:/data
       - ./config/config.json:/app/config/config.json:ro

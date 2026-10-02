@@ -245,7 +245,7 @@ func serve(parent context.Context, cfg config.Config, options serveOptions, deps
 	}
 	libraryEnabled := cfg.Library.CollectEnabled || cfg.Library.ProcessEnabled
 	if libraryEnabled {
-		if err := cfg.Library.Validate(); err != nil {
+		if err := cfg.ValidateLibrary(); err != nil {
 			return err
 		}
 	}
@@ -263,7 +263,7 @@ func serve(parent context.Context, cfg config.Config, options serveOptions, deps
 	if staticFS == nil {
 		staticFS = os.DirFS(options.WebDir)
 	}
-	handler, err := web.NewWithDocuments(store, staticFS, &document.Repository{Root: cfg.Library.DocumentDir}, web.Options{DeliveryEnabled: cfg.Delivery.Enabled, Topics: cfg.Topics})
+	handler, err := web.NewWithDocuments(store, staticFS, &document.Repository{Root: cfg.Library.DocumentDir}, web.Options{DeliveryEnabled: cfg.Delivery.Enabled, Topics: cfg.Topics, SettingsToken: os.Getenv("PAPER_DIGEST_SETTINGS_TOKEN")})
 	if err != nil {
 		return err
 	}

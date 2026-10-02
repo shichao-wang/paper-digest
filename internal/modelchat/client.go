@@ -145,6 +145,23 @@ type Request struct {
 	JSONObject bool
 	MaxTokens  int
 }
+
+// AnalysisOutputTokens 是论文库 JSON 请求的单次最大输出，不是任务累计预算。
+const AnalysisOutputTokens = 4096
+
+// ReservationTokens 按输入 UTF-8 字节、wire 字段开销和输出上限保守预留。
+// 调用方先显式确定 MaxTokens；配置预检和持久检查点必须使用同一公式。
+func ReservationTokens(request Request, model string) (int64, error) {
+	if request.MaxTokens <= 0 {
+		return 0, errors.New("token reservation requires a positive output limit")
+	}
+	raw, err := json.Marshal(request)
+	if err != nil {
+		return 0, errors.New("invalid chat request JSON")
+	}
+	return int64(len(raw)) + 1024 + 6*int64(len(model)) + int64(request.MaxTokens), nil
+}
+
 type Usage struct {
 	PromptTokens     int64 `json:"prompt_tokens"`
 	CompletionTokens int64 `json:"completion_tokens"`

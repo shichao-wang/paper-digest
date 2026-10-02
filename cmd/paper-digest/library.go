@@ -156,7 +156,7 @@ func runLibraryCommandWithDependencies(ctx context.Context, cfg config.Config, a
 		return seedDemo(ctx, cfg)
 	}
 	if args[0] == "collect" || args[0] == "process" {
-		if err := cfg.Library.Validate(); err != nil {
+		if err := cfg.ValidateLibrary(); err != nil {
 			return err
 		}
 	}
@@ -229,7 +229,7 @@ func runLibraryCommandWithDependencies(ctx context.Context, cfg config.Config, a
 		if generation == int(^uint(0)>>1) {
 			return errors.New("Library generation 已达到上限")
 		}
-		return store.EnqueueTask(ctx, identity, "relevance", generation+1)
+		return store.EnqueueTask(ctx, identity, "metadata", generation+1)
 	case "backup-library":
 		return archive.Backup(ctx, store, cfg.Library.DocumentDir, args[1])
 	}

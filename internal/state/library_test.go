@@ -394,12 +394,13 @@ func TestLibraryGenerationPointersAndComparisonAnalysisBinding(t *testing.T) {
 	if err := s.UpsertVersion(ctx, v); err != nil {
 		t.Fatal(err)
 	}
-	for _, g := range []int{0, 1} {
-		if err := s.EnqueueTask(ctx, v.Identity, "analyze", g); err != nil {
-			t.Fatal(err)
-		}
+	if err := s.EnqueueTask(ctx, v.Identity, "analyze", 0); err != nil {
+		t.Fatal(err)
 	}
 	older := claimFixture(t, s, "analyze", libraryNow)
+	if err := s.EnqueueTask(ctx, v.Identity, "analyze", 1); err != nil {
+		t.Fatal(err)
+	}
 	newer := claimFixture(t, s, "analyze", libraryNow)
 	analysis := library.Analysis{PaperVersionID: v.Identity.Key(), SchemaVersion: library.SchemaVersion, Model: "new-model", Content: library.AnalysisContent{TitleZH: "new"}}
 	if err := s.CompleteTask(ctx, newer, library.Completion{Analysis: &analysis}, libraryNow); err != nil {

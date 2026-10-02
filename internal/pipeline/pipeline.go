@@ -46,7 +46,7 @@ func New(cfg config.Config, store *state.Store) (*Runner, error) {
 	if store == nil {
 		return nil, library.ErrInvalid
 	}
-	if err := cfg.Library.Validate(); err != nil {
+	if err := cfg.ValidateLibrary(); err != nil {
 		return nil, err
 	}
 	model := cfg.Anthropic.Model

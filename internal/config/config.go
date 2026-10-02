@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/shichao-wang/paper-digest/internal/analysis"
 	"github.com/shichao-wang/paper-digest/internal/arxivclient"
 )
 
@@ -94,8 +95,11 @@ func defaultDocumentDir(databasePath string) (string, error) {
 }
 
 func (l Library) Validate() error {
-	if l.Concurrency < 1 || l.Concurrency > 8 || l.PollSeconds < 60 || l.MaxRequests < 1 || l.MaxRequests > 1000 || l.MaxTokens < 4096 || l.TaskTimeoutSeconds < 60 || l.TaskTimeoutSeconds > 7200 || strings.TrimSpace(l.DocumentDir) == "" {
+	if l.Concurrency < 1 || l.Concurrency > 8 || l.PollSeconds < 60 || l.MaxRequests < 1 || l.MaxRequests > 1000 || l.TaskTimeoutSeconds < 60 || l.TaskTimeoutSeconds > 7200 || strings.TrimSpace(l.DocumentDir) == "" {
 		return errors.New("library 的并发、轮询、预算、超时或文档目录不合法")
+	}
+	if err := l.validateTokenBudget(""); err != nil {
+		return err
 	}
 	seen := map[string]bool{}
 	for _, c := range l.Categories {
@@ -103,6 +107,17 @@ func (l Library) Validate() error {
 			return errors.New("library.categories 包含不支持或重复分类；支持 cs.IR、cs.LG、cs.AI、cs.CL、stat.ML")
 		}
 		seen[c] = true
+	}
+	return nil
+}
+
+func (l Library) validateTokenBudget(model string) error {
+	minimum, err := analysis.MinimumScreenReservation(model)
+	if err != nil {
+		return errors.New("无法计算 library.max_tokens 的首请求预留")
+	}
+	if l.MaxTokens < minimum {
+		return fmt.Errorf("library.max_tokens 至少为 %d，才能预留一次最小筛选请求（含提示、协议开销和最大输出）；这是任务累计预算", minimum)
 	}
 	return nil
 }
@@ -166,10 +181,22 @@ func Load(path string) (Config, error) {
 	if err := cfg.Library.defaults(cfg.Database.Path); err != nil {
 		return Config{}, err
 	}
-	if err := cfg.Library.Validate(); err != nil {
+	if err := cfg.ValidateLibrary(); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+// ValidateLibrary 也适用于直接构造的配置，计入实际模型及默认模型的开销。
+func (c Config) ValidateLibrary() error {
+	model := c.Anthropic.Model
+	if model == "" {
+		model = "deepseek-flash"
+	}
+	if err := c.Library.validateTokenBudget(model); err != nil {
+		return err
+	}
+	return c.Library.Validate()
 }
 
 func (c Config) Webhook(topicID string) (string, error) {

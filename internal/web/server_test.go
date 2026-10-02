@@ -80,6 +80,7 @@ func TestWebhookSettingsPersistWithoutExposingURL(t *testing.T) {
 	check(request(handler, "GET", "/api/settings/webhook", ""), false)
 	put := func(body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest("PUT", "http://localhost/api/settings/webhook", strings.NewReader(body))
+		req.RemoteAddr = "127.0.0.1:54321"
 		req.Header.Set("Content-Type", "application/json; charset=utf-8")
 		req.Header.Set("Origin", "http://"+req.Host)
 		w := httptest.NewRecorder()
@@ -105,6 +106,7 @@ func TestWebhookSettingsPersistWithoutExposingURL(t *testing.T) {
 	store.Close()
 	for _, method := range []string{"GET", "PUT"} {
 		req := httptest.NewRequest(method, "http://localhost/api/settings/webhook", strings.NewReader(`{"webhookURL":"`+server.URL+`/secret"}`))
+		req.RemoteAddr = "127.0.0.1:54321"
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
@@ -156,6 +158,7 @@ func TestWebhookPutStrictValidationAndSameOrigin(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequest("PUT", "http://localhost/api/settings/webhook", strings.NewReader(tc.body))
+			req.RemoteAddr = "127.0.0.1:54321"
 			req.Header.Set("Content-Type", tc.contentType)
 			if tc.origin != "" {
 				req.Header.Set("Origin", tc.origin)
@@ -173,6 +176,7 @@ func TestWebhookPutStrictValidationAndSameOrigin(t *testing.T) {
 	}
 	for _, origins := range [][]string{{""}, {"http://localhost", "http://localhost"}, {"http://localhost#"}} {
 		req := httptest.NewRequest("PUT", "http://localhost/api/settings/webhook", strings.NewReader(valid))
+		req.RemoteAddr = "127.0.0.1:54321"
 		req.Header.Set("Content-Type", "application/json")
 		req.Header["Origin"] = origins
 		w := httptest.NewRecorder()
@@ -210,6 +214,7 @@ func TestWebhookSettingsRejectReboundHost(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/origin=%t", tc.host, withOrigin), func(t *testing.T) {
 				req := httptest.NewRequest("PUT", "/api/settings/webhook", strings.NewReader(`{"webhookURL":""}`))
 				req.Host = tc.host
+				req.RemoteAddr = "127.0.0.1:54321"
 				req.Header.Set("Content-Type", "application/json")
 				req.Header.Set("Sec-Fetch-Site", "same-origin")
 				if withOrigin {
@@ -229,6 +234,180 @@ func TestWebhookSettingsRejectReboundHost(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestWebhookSettingsRequireLoopbackPeer(t *testing.T) {
+	store, handler := testHandler(t)
+	ctx := context.Background()
+	const initial = "https://example.invalid/original"
+	for _, tc := range []struct {
+		peer string
+		want int
+	}{
+		{"127.0.0.1:54321", http.StatusOK},
+		{"127.0.0.2:54321", http.StatusOK},
+		{"[::1]:54321", http.StatusOK},
+		{"[::ffff:127.0.0.1]:54321", http.StatusOK},
+		{"192.0.2.1:54321", http.StatusForbidden},
+		{"192.168.1.10:54321", http.StatusForbidden},
+		{"172.18.0.1:54321", http.StatusForbidden},
+		{"[2001:db8::1]:54321", http.StatusForbidden},
+		{"0.0.0.0:54321", http.StatusForbidden},
+		{"[::]:54321", http.StatusForbidden},
+		{"localhost:54321", http.StatusForbidden},
+		{"127.0.0.1", http.StatusForbidden},
+		{"", http.StatusForbidden},
+	} {
+		for _, withOrigin := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/origin=%t", tc.peer, withOrigin), func(t *testing.T) {
+				if err := store.SetWebhook(ctx, job.Topic, initial); err != nil {
+					t.Fatal(err)
+				}
+				req := httptest.NewRequest("PUT", "http://localhost/api/settings/webhook", strings.NewReader(`{"webhookURL":""}`))
+				req.RemoteAddr = tc.peer
+				req.Header.Set("Content-Type", "application/json")
+				req.Header.Set("Sec-Fetch-Site", "same-origin")
+				// 这些可由客户端伪造的代理头不能替代直接连接的来源。
+				req.Header.Set("X-Forwarded-For", "127.0.0.1")
+				req.Header.Set("X-Real-IP", "::1")
+				req.Header.Set("Forwarded", `for="[::1]";host=localhost;proto=http`)
+				if withOrigin {
+					req.Header.Set("Origin", "http://localhost")
+				}
+				response := httptest.NewRecorder()
+				handler.ServeHTTP(response, req)
+				if response.Code != tc.want || response.Header().Get("Cache-Control") != "no-store" {
+					t.Fatalf("response=%d %s want=%d", response.Code, response.Body.String(), tc.want)
+				}
+				got, err := store.Webhook(ctx, job.Topic)
+				if err != nil || (tc.want == http.StatusForbidden && got != initial) || (tc.want == http.StatusOK && got != "") {
+					t.Fatal("来源校验后的设置与预期不符")
+				}
+				// 非回环来源仍可查询只含 configured 等状态的只读接口。
+				req = httptest.NewRequest("GET", "http://localhost/api/settings/webhook", nil)
+				req.RemoteAddr = tc.peer
+				response = httptest.NewRecorder()
+				handler.ServeHTTP(response, req)
+				if response.Code != http.StatusOK || strings.Contains(response.Body.String(), initial) {
+					t.Fatalf("read settings=%d %s", response.Code, response.Body.String())
+				}
+			})
+		}
+	}
+}
+
+func TestWebhookSettingsTokenRequiredForAllPeersWhenConfigured(t *testing.T) {
+	store, _ := testHandler(t)
+	const token = "synthetic-settings-authorization"
+	const initial = "https://example.invalid/original"
+	ctx := context.Background()
+	handler, err := New(store, fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("fixture")}}, Options{
+		Topics: []config.Topic{{ID: job.Topic}}, SettingsToken: token,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, peer := range []string{"127.0.0.1:54321", "[::1]:54321", "192.0.2.1:54321", "172.18.0.1:54321"} {
+		for _, tc := range []struct {
+			name           string
+			authorizations []string
+			host, origin   string
+			site           string
+			want           int
+		}{
+			{"missing token", nil, "localhost", "http://localhost", "same-origin", 403},
+			{"wrong token", []string{"Bearer incorrect"}, "localhost", "http://localhost", "same-origin", 403},
+			{"longer token", []string{"Bearer " + token + "-extra"}, "localhost", "http://localhost", "same-origin", 403},
+			{"basic scheme", []string{"Basic " + token}, "localhost", "http://localhost", "same-origin", 403},
+			{"empty bearer", []string{"Bearer "}, "localhost", "http://localhost", "same-origin", 403},
+			{"extra bearer space", []string{"Bearer  " + token}, "localhost", "http://localhost", "same-origin", 403},
+			{"duplicate headers", []string{"Bearer " + token, "Bearer " + token}, "localhost", "http://localhost", "same-origin", 403},
+			{"joined headers", []string{"Bearer " + token + ", Bearer " + token}, "localhost", "http://localhost", "same-origin", 403},
+			{"valid token", []string{"Bearer " + token}, "localhost", "http://localhost", "same-origin", 200},
+			{"case insensitive scheme", []string{"bearer " + token}, "127.0.0.1:8080", "http://127.0.0.1:8080", "same-origin", 200},
+			{"authorized CLI", []string{"Bearer " + token}, "localhost", "", "", 200},
+			{"token cannot bypass host", []string{"Bearer " + token}, "attacker.invalid", "http://attacker.invalid", "same-origin", 403},
+			{"token cannot bypass origin", []string{"Bearer " + token}, "localhost", "https://attacker.invalid", "same-origin", 403},
+			{"token cannot bypass fetch site", []string{"Bearer " + token}, "localhost", "http://localhost", "cross-site", 403},
+		} {
+			t.Run(peer+"/"+tc.name, func(t *testing.T) {
+				if err := store.SetWebhook(ctx, job.Topic, initial); err != nil {
+					t.Fatal(err)
+				}
+				req := httptest.NewRequest("PUT", "http://localhost/api/settings/webhook", strings.NewReader(`{"webhookURL":""}`))
+				req.RemoteAddr, req.Host = peer, tc.host
+				req.Header.Set("Content-Type", "application/json")
+				req.Header.Set("X-Forwarded-For", "127.0.0.1")
+				if tc.origin != "" {
+					req.Header.Set("Origin", tc.origin)
+				}
+				req.Header.Set("Sec-Fetch-Site", tc.site)
+				for _, authorization := range tc.authorizations {
+					req.Header.Add("Authorization", authorization)
+				}
+				response := httptest.NewRecorder()
+				handler.ServeHTTP(response, req)
+				if response.Code != tc.want || response.Header().Get("Cache-Control") != "no-store" || strings.Contains(response.Body.String(), token) || strings.Contains(response.Body.String(), initial) {
+					t.Fatalf("response=%d %s want=%d", response.Code, response.Body.String(), tc.want)
+				}
+				got, err := store.Webhook(ctx, job.Topic)
+				if err != nil || (tc.want == 403 && got != initial) || (tc.want == 200 && got != "") {
+					t.Fatal("令牌校验后的设置与预期不符")
+				}
+			})
+		}
+	}
+}
+
+func TestWebhookSettingsAuthorizationOverHTTP(t *testing.T) {
+	store, _ := testHandler(t)
+	ctx := context.Background()
+	const token = "synthetic-http-settings-authorization"
+	const initial = "https://example.invalid/original"
+	for _, configured := range []bool{false, true} {
+		t.Run(fmt.Sprintf("token-configured=%t", configured), func(t *testing.T) {
+			options := Options{Topics: []config.Topic{{ID: job.Topic}}}
+			if configured {
+				options.SettingsToken = token
+			}
+			handler, err := New(store, fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("fixture")}}, options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			server := httptest.NewServer(handler)
+			defer server.Close()
+			for _, authorization := range []string{"", "Bearer incorrect", "Bearer " + token} {
+				if err := store.SetWebhook(ctx, job.Topic, initial); err != nil {
+					t.Fatal(err)
+				}
+				req, err := http.NewRequest("PUT", server.URL+"/api/settings/webhook", strings.NewReader(`{"webhookURL":""}`))
+				if err != nil {
+					t.Fatal(err)
+				}
+				req.Header.Set("Content-Type", "application/json")
+				req.Header.Set("Origin", server.URL)
+				if authorization != "" {
+					req.Header.Set("Authorization", authorization)
+				}
+				response, err := server.Client().Do(req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				response.Body.Close()
+				want := http.StatusOK
+				if configured && authorization != "Bearer "+token {
+					want = http.StatusForbidden
+				}
+				if response.StatusCode != want {
+					t.Fatalf("HTTP response=%d want=%d", response.StatusCode, want)
+				}
+				got, err := store.Webhook(ctx, job.Topic)
+				if err != nil || (want == http.StatusForbidden && got != initial) || (want == http.StatusOK && got != "") {
+					t.Fatal("HTTP 来源授权后的设置与预期不符")
+				}
+			}
+		})
 	}
 }
 
@@ -469,6 +648,7 @@ func TestEmptyConfiguredTopicDirectory(t *testing.T) {
 		}
 		for _, target := range []string{"http://localhost/api/settings/webhook", "http://localhost/api/settings/webhook?topic=" + job.Topic} {
 			req := httptest.NewRequest("PUT", target, strings.NewReader(`{"webhookURL":"https://example.invalid/empty-directory-secret"}`))
+			req.RemoteAddr = "127.0.0.1:54321"
 			req.Header.Set("Content-Type", "application/json")
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, req)
@@ -582,6 +762,7 @@ func TestTopicQueryValidationRejectsUnknownHistoricalAndMalformedTopics(t *testi
 					separator = "&"
 				}
 				req := httptest.NewRequest(endpoint.method, "http://localhost"+endpoint.target+separator+tc.query, strings.NewReader(`{"webhookURL":""}`))
+				req.RemoteAddr = "127.0.0.1:54321"
 				req.Header.Set("Content-Type", "application/json")
 				response := httptest.NewRecorder()
 				handler.ServeHTTP(response, req)
@@ -617,6 +798,7 @@ func TestWebhookSettingsWriteAndClearOnlySelectedTopic(t *testing.T) {
 			t.Fatal(err)
 		}
 		req := httptest.NewRequest("PUT", "http://localhost/api/settings/webhook?topic="+topic, strings.NewReader(string(body)))
+		req.RemoteAddr = "127.0.0.1:54321"
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Origin", "http://localhost")
 		response := httptest.NewRecorder()

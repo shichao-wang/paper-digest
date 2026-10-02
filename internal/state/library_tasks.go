@@ -64,7 +64,7 @@ func (s *Store) ClaimTaskQuery(ctx context.Context, stage string, now time.Time,
 		return library.Task{}, err
 	}
 	defer tx.Rollback()
-	t, err := scanTask(tx.QueryRowContext(ctx, taskSelect+` WHERE t.stage=? AND ((t.status IN ('queued','retry_wait') AND t.next_attempt<=?) OR (t.status='running' AND t.lease_until<=?)) AND EXISTS(SELECT 1`+libraryListFrom+where+`) ORDER BY t.id LIMIT 1`, args...))
+	t, err := scanTask(tx.QueryRowContext(ctx, taskSelect+` WHERE t.stage=? AND ((t.status IN ('queued','retry_wait') AND t.next_attempt<=?) OR (t.status='running' AND t.lease_until<=?)) AND NOT EXISTS(SELECT 1 FROM library_tasks newer WHERE newer.source=t.source AND newer.paper_id=t.paper_id AND newer.version=t.version AND newer.generation>t.generation) AND EXISTS(SELECT 1`+libraryListFrom+where+`) ORDER BY t.id LIMIT 1`, args...))
 	if err != nil {
 		return library.Task{}, err
 	}

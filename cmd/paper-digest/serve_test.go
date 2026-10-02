@@ -56,7 +56,7 @@ func serveConfig(path string, enabled bool) config.Config {
 	cfg.Topics = []config.Topic{{ID: job.Topic, WebhookURL: "https://example.invalid/fixture"}}
 	cfg.Library = config.Library{
 		Categories: []string{"cs.IR"}, DocumentDir: filepath.Join(filepath.Dir(path), "documents"),
-		Concurrency: 1, PollSeconds: 60, MaxRequests: 20, MaxTokens: 4096, TaskTimeoutSeconds: 60,
+		Concurrency: 1, PollSeconds: 60, MaxRequests: 20, MaxTokens: 500000, TaskTimeoutSeconds: 60,
 	}
 	return cfg
 }
@@ -127,6 +127,80 @@ func TestEnabledServeRejectsLegacyChatBeforeListenAndRecovery(t *testing.T) {
 	saved, err := store.GetJob(context.Background(), job.Topic, "2026-09-29")
 	if err != nil || saved.Status != "sending" {
 		t.Fatalf("invalid Chat startup recovered interrupted send: %+v %v", saved, err)
+	}
+}
+
+func TestServeInjectsSettingsAuthorizationFromEnvironment(t *testing.T) {
+	const token = "synthetic-serve-settings-authorization"
+	t.Setenv("PAPER_DIGEST_SETTINGS_TOKEN", token)
+	cfg := serveConfig(filepath.Join(t.TempDir(), "settings-auth.db"), false)
+	cfg.Topics[0].WebhookURL = ""
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	address := make(chan string, 1)
+	result := make(chan error, 1)
+	go func() {
+		result <- serve(ctx, cfg, serveOptions{Listen: "127.0.0.1:0"}, serveDependencies{
+			StaticFS: fixtureFS(),
+			Listen: func(network, addr string) (net.Listener, error) {
+				listener, err := net.Listen(network, addr)
+				if err == nil {
+					address <- listener.Addr().String()
+				}
+				return listener, err
+			},
+		})
+	}()
+	var addr string
+	select {
+	case addr = <-address:
+	case err := <-result:
+		t.Fatalf("启动失败: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("未启动HTTP")
+	}
+	// 所有请求走真实回环 TCP：启用令牌后，代理呈现的本机来源也不能免授权。
+	client := &http.Client{Timeout: time.Second}
+	for _, authorization := range []string{"", "Bearer incorrect", "Bearer " + token} {
+		req, err := http.NewRequest("PUT", "http://"+addr+"/api/settings/webhook", strings.NewReader(`{"webhookURL":"https://example.invalid/synthetic"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Origin", "http://"+addr)
+		if authorization != "" {
+			req.Header.Set("Authorization", authorization)
+		}
+		response, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(response.Body)
+		response.Body.Close()
+		want := http.StatusForbidden
+		if authorization == "Bearer "+token {
+			want = http.StatusOK
+		}
+		if err != nil || response.StatusCode != want || strings.Contains(string(body), token) || strings.Contains(string(body), "https://example.invalid/synthetic") {
+			t.Fatalf("settings authorization=%d %s %v", response.StatusCode, body, err)
+		}
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("服务未停止")
+	}
+	store, err := state.Open(cfg.Database.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if got, err := store.Webhook(context.Background(), job.Topic); err != nil || got != "https://example.invalid/synthetic" {
+		t.Fatal("授权写入未保存")
 	}
 }
 

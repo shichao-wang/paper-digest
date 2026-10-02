@@ -2,6 +2,8 @@ package web
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +12,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"path"
 	"strconv"
@@ -26,6 +29,8 @@ import (
 type Options struct {
 	DeliveryEnabled bool
 	Topics          []config.Topic
+	// SettingsToken 非空时所有设置写入均须授权；空值只允许直接本机管理。
+	SettingsToken string
 }
 
 type topicRecord struct {
@@ -63,6 +68,10 @@ func NewWithDocuments(store *state.Store, staticFS fs.FS, repository *document.R
 	if len(options) > 0 {
 		settings = options[0]
 	}
+	if settings.SettingsToken != "" {
+		s.settingsTokenEnabled = true
+		s.settingsTokenHash = sha256.Sum256([]byte(settings.SettingsToken))
+	}
 	for _, topic := range settings.Topics {
 		name := topic.ID
 		if topic.ID == job.Topic {
@@ -83,12 +92,14 @@ type evidenceRepository interface {
 }
 
 type server struct {
-	store        *state.Store
-	staticFS     fs.FS
-	files        http.Handler
-	documents    evidenceRepository
-	topics       []topicRecord
-	defaultTopic string
+	store                *state.Store
+	staticFS             fs.FS
+	files                http.Handler
+	documents            evidenceRepository
+	topics               []topicRecord
+	defaultTopic         string
+	settingsTokenEnabled bool
+	settingsTokenHash    [sha256.Size]byte
 }
 
 func (s *server) selectTopic(w http.ResponseWriter, r *http.Request) (topicRecord, bool) {
@@ -314,6 +325,10 @@ func (s *server) webhookSettings(w http.ResponseWriter, r *http.Request) {
 	var webhook string
 	var err error
 	if r.Method == http.MethodPut {
+		if !s.settingsWriteAuthorized(r) {
+			writeError(w, http.StatusForbidden, "local connection or settings authorization required")
+			return
+		}
 		if !sameOrigin(r) {
 			writeError(w, http.StatusForbidden, "same-origin request required")
 			return
@@ -375,6 +390,28 @@ func decodeWebhook(body io.Reader) (string, error) {
 		return "", invalid
 	}
 	return *value, nil
+}
+
+func (s *server) settingsWriteAuthorized(r *http.Request) bool {
+	// RemoteAddr 来自直接 TCP 连接；不使用可伪造的 Host 或转发头判断来源。
+	peer, err := netip.ParseAddrPort(r.RemoteAddr)
+	if err != nil {
+		return false
+	}
+	if !s.settingsTokenEnabled {
+		return peer.Addr().Unmap().IsLoopback()
+	}
+	authorizations := r.Header.Values("Authorization")
+	if len(authorizations) != 1 {
+		return false
+	}
+	scheme, token, ok := strings.Cut(authorizations[0], " ")
+	if !ok || !strings.EqualFold(scheme, "Bearer") || token == "" || strings.ContainsAny(token, " \t\r\n") {
+		return false
+	}
+	// 比较固定长度摘要，使 token 长度不同也不导致提前退出。
+	provided := sha256.Sum256([]byte(token))
+	return subtle.ConstantTimeCompare(provided[:], s.settingsTokenHash[:]) == 1
 }
 
 func localSettingsHost(authority string) bool {

@@ -79,7 +79,20 @@ go run ./cmd/paper-digest --config data/web-preview/config.json serve
 
 飞书群机器人 Webhook 在「主题管理」中配置，点击目标主题所在行的「编辑推送配置」。每个主题独立保存地址；保存、替换或清除一个主题不会修改其他主题。地址保存在 SQLite 数据卷中，推送每次读取当前配置，无需重启容器；已保存的地址不回显。清除配置经过确认后暂停当前主题推送，重新配置后恢复。保存和清除不会发送群消息，也不会补发历史日报。
 
-页面没有登录功能，设置写入仅接受 `localhost` 或回环 IP 的 Host，请从本机地址打开设置。代理需保留原始 Host；域名入口不能用于修改 Webhook，对外开放阅读页面时仍需配置访问控制。
+页面没有登录功能。未配置管理令牌时，设置写入只允许 TCP 连接来源（`RemoteAddr`）为回环 IP；伪造 `Host: localhost` 或 `Forwarded`、`X-Forwarded-For`、`X-Real-IP` 不会取得写入权限。启用 `PAPER_DIGEST_SETTINGS_TOKEN` 后，**所有设置写入，包括回环连接，都必须携带管理令牌**。页面「编辑推送配置」中的令牌以密码输入，只保留在当前设置页内存，离开页面后需重新填写，不保存至浏览器存储，也不由 API 回显。
+
+Docker 端口转发到容器时，连接来源通常是非回环的 Docker 网关，因此现有 Compose 页面管理需显式配置令牌。启动前在本机终端用隐藏输入设置环境变量，再执行原来的 Compose 命令（令牌不要写入 JSON、示例配置或命令参数）：
+
+```bash
+read -rs PAPER_DIGEST_SETTINGS_TOKEN
+export PAPER_DIGEST_SETTINGS_TOKEN
+docker compose up -d --build
+unset PAPER_DIGEST_SETTINGS_TOKEN
+```
+
+输入独立、高随机性的管理令牌并按回车，然后从 http://127.0.0.1:8080 打开设置并在密码框填同一令牌。Compose 只透传这个可选环境变量，默认空值保持非回环写入拒绝；不会自动生成或启用管理凭据。直接运行 Go 服务时也可通过同一环境变量启用授权。后续重建容器必须再次提供同一令牌；轮换令牌须重新创建服务，数据库与 Webhook 不受影响。不要将带令牌的 `docker compose config` 输出分享或存档。
+
+Host 必须为 `localhost` 或回环 IP，浏览器 Origin 必须与 Host 同源；正确令牌也不会绕过这些校验。代理需保留原始 Host，域名入口不能修改 Webhook。本机反向代理可能让远端请求呈现回环来源，**代理部署必须启用管理令牌**并约束管理入口；不能仅以服务看到回环来源作为授权。对外开放阅读页面时仍需配置访问控制；管理令牌只通过受保护的本机或 HTTPS 链路传输。
 
 已有 JSON 中的 `topics[].webhook_url` 仍兼容：`serve` 和已确认的 `send-test` 首次打开数据库时，将合法的旧地址迁入数据库，已有页面配置不会被覆盖，已清除的地址也不会复活。迁移后可从实际 JSON 中移除 `webhook_url`。数据库与备份包含 Webhook 密钥，应按凭据保管。数据库、已有 WAL/SHM 与备份以 `0600` 保管；无法收紧权限时会报错停止操作。
 
