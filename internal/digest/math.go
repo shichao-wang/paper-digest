@@ -8,9 +8,10 @@ import (
 )
 
 var mathDelimiters = [][2]string{{"$$", "$$"}, {"$", "$"}, {`\(`, `\)`}, {`\[`, `\]`}}
-var currencyAmount = regexp.MustCompile(`^\$[+-]?[0-9]+(?:[.,][0-9]+)*`)
+var currencyAmount = regexp.MustCompile(`^\$[+-]?[0-9]+(?:[.,][0-9]+)*(?:[kKmMbBtT])?`)
 
-// 数字后接空白、标点或句尾的单个美元符号视为金额；歧义公式可用 \(...\)。
+// Recognize amounts, magnitude suffixes and numeric ranges. A following math
+// closer or operator still identifies a formula; ambiguous math can use \(...\).
 func isCurrency(text string, index int) bool {
 	amount := currencyAmount.FindString(text[index:])
 	if amount == "" {
@@ -21,7 +22,21 @@ func isCurrency(text string, index int) bool {
 		return true
 	}
 	char, _ := utf8.DecodeRuneInString(text[next:])
-	return unicode.IsSpace(char) || strings.ContainsRune(".,;:!?，。；：！？", char)
+	if strings.ContainsRune("-–—~～", char) {
+		_, width := utf8.DecodeRuneInString(text[next:])
+		remainder := strings.TrimLeftFunc(text[next+width:], unicode.IsSpace)
+		if !strings.HasPrefix(remainder, "$") {
+			remainder = "$" + remainder
+		}
+		if other := currencyAmount.FindString(remainder); other != "" {
+			if len(other) == len(remainder) {
+				return true
+			}
+			following, _ := utf8.DecodeRuneInString(remainder[len(other):])
+			return unicode.IsSpace(following) || strings.ContainsRune(".,;:!?，。；：！？、", following)
+		}
+	}
+	return unicode.IsSpace(char) || strings.ContainsRune(".,;:!?，。；：！？、", char)
 }
 
 func mathDelimiterAt(text string, index int) (string, string) {

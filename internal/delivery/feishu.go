@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -103,6 +104,16 @@ func (f Feishu) ValidateMarkdown(text string) error {
 	return f.validatePayload(payload)
 }
 
+var feishuMentionTag = regexp.MustCompile(`(?i)</?at\b[^>]*>`)
+
+// Model and paper text must not activate Feishu-specific mention markup.
+// Escape only mention tags so ordinary Markdown and card styling still work.
+func escapeFeishuMentions(text string) string {
+	return feishuMentionTag.ReplaceAllStringFunc(text, func(tag string) string {
+		return strings.ReplaceAll(strings.ReplaceAll(tag, "<", "&lt;"), ">", "&gt;")
+	})
+}
+
 func markdownCard(text string) map[string]any {
 	blocks := strings.SplitN(strings.TrimSpace(text), "\n\n", 5)
 	header := "arXiv 论文日报"
@@ -111,7 +122,7 @@ func markdownCard(text string) map[string]any {
 		blocks = blocks[1:]
 	}
 	markdown := func(content, size string) map[string]any {
-		return map[string]any{"tag": "markdown", "content": content, "text_size": size}
+		return map[string]any{"tag": "markdown", "content": escapeFeishuMentions(content), "text_size": size}
 	}
 	elements := make([]map[string]any, 0, len(blocks))
 	for _, block := range blocks {

@@ -125,3 +125,55 @@ func TestFeishuRejectsOversizedPayloadWithoutRequest(t *testing.T) {
 		t.Fatal("expected size limit")
 	}
 }
+
+func TestFeishuCardEscapesMentionTagsInAllMarkdown(t *testing.T) {
+	text := "# 日报\n\n说明\n\n## <at id=all></at> Title\n\n- 原文：[论文](https://arxiv.org/abs/2610.00001)\n- 作者：<AT id=someone></AT>\n\n- **方法**：<at id=all></at> 与 <at id=someone>姓名</at>，结果 $x$"
+	requests := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		var contents []string
+		var check func(any)
+		check = func(value any) {
+			switch value := value.(type) {
+			case map[string]any:
+				if value["tag"] == "markdown" {
+					content := value["content"].(string)
+					contents = append(contents, content)
+					if strings.Contains(strings.ToLower(content), "<at") || strings.Contains(strings.ToLower(content), "</at") {
+						t.Errorf("active mention in card: %q", content)
+					}
+				}
+				for _, child := range value {
+					check(child)
+				}
+			case []any:
+				for _, child := range value {
+					check(child)
+				}
+			}
+		}
+		check(payload)
+		raw := strings.Join(contents, "\n")
+		for _, want := range []string{"**方法**", "https://arxiv.org/abs/2610.00001", "$x$", "姓名", "&lt;at id=all&gt;"} {
+			if !strings.Contains(raw, want) {
+				t.Errorf("lost formatting or escaped mention: %s", want)
+			}
+		}
+		_, _ = w.Write([]byte(`{"code":0}`))
+	}))
+	defer server.Close()
+	sender := Feishu{WebhookURL: server.URL, Client: server.Client()}
+	if err := sender.ValidateMarkdown(text); err != nil {
+		t.Fatal(err)
+	}
+	if err := sender.SendMarkdown(context.Background(), text); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests=%d", requests)
+	}
+}
