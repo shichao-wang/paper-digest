@@ -109,6 +109,15 @@ func (r *Runner) Deliver(ctx context.Context, date string) error {
 		}
 		sender = prepared
 	}
+	items, err := r.Store.Completed(ctx, Topic, date)
+	if err != nil {
+		return err
+	}
+	day, err := time.ParseInLocation("2006-01-02", date, beijing())
+	if err != nil {
+		return err
+	}
+	messages := digest.RenderMessages(day, items)
 	claimed, err := r.Store.ClaimSend(ctx, Topic, date)
 	if err != nil {
 		return err
@@ -116,17 +125,38 @@ func (r *Runner) Deliver(ctx context.Context, date string) error {
 	if !claimed {
 		return errors.New("日报未就绪、已发送或发送结果待核对")
 	}
-	current, err := r.Store.GetJob(ctx, Topic, date)
-	if err != nil {
-		return err
-	}
-	if err := sender.Send(ctx, current.Message); err != nil {
+	for i, message := range messages {
+		// Space a five-paper batch below the robot's five requests/second limit.
+		if i > 0 {
+			timer := time.NewTimer(250 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+			case <-timer.C:
+			}
+		}
+		send := sender.Send
+		if markdown, ok := sender.(delivery.MarkdownSender); ok {
+			send = markdown.SendMarkdown
+		}
+		err := ctx.Err()
+		if err == nil {
+			err = send(ctx, message)
+		}
+		if err == nil && len(items) > 0 {
+			writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			err = r.Store.MarkPaperSent(writeCtx, Topic, date, items[i].Paper.ID)
+			cancel()
+		}
+		if err == nil {
+			continue
+		}
 		writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
 		if markErr := r.Store.MarkUnknown(writeCtx, Topic, date); markErr != nil {
 			return fmt.Errorf("飞书响应未确认且本地状态保存失败，禁止重发: %w", errors.Join(err, markErr))
 		}
-		return err
+		return fmt.Errorf("第 %d/%d 条论文消息发送未完成: %w", i+1, len(messages), err)
 	}
 	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()

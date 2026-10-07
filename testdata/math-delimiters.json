@@ -1,0 +1,22 @@
+[
+  {"text":"结果为 $x^2", "complete":false, "formulas":0},
+  {"text":"结果为 $$x^2", "complete":false, "formulas":0},
+  {"text":"结果为 \\(x^2", "complete":false, "formulas":0},
+  {"text":"结果为 \\[x^2", "complete":false, "formulas":0},
+  {"text":"\\)x\\(", "complete":false, "formulas":0},
+  {"text":"\\(x\\]", "complete":false, "formulas":0},
+  {"text":"$x$$", "complete":false, "formulas":0},
+  {"text":"$$x$", "complete":false, "formulas":0},
+  {"text":"$x\\$", "complete":false, "formulas":0},
+  {"text":"$x^{2$", "complete":false, "formulas":0},
+  {"text":"$x$ $$y$$ \\(z\\) \\[w\\]", "complete":true, "formulas":4},
+  {"text":"$5$、$2.5$、$2^{O(n)}$、$1/ε$", "complete":true, "formulas":4},
+  {"text":"costs $5 million versus $10 million", "complete":true, "formulas":0},
+  {"text":"costs $5.00, $10.50 or $1,000.25.", "complete":true, "formulas":0},
+  {"text":"成本 $5，收益 $10。", "complete":true, "formulas":0},
+  {"text":"cost $5", "complete":true, "formulas":0},
+  {"text":"costs $5 million; result $x^2$ and $10 million.", "complete":true, "formulas":1},
+  {"text":"literal \\$x and \\\\(x); formula $y$", "complete":true, "formulas":1},
+  {"text":"price $\\$5$ and \\(\\$10\\)", "complete":true, "formulas":2},
+  {"text":"$\\text{cost $5}$", "complete":true, "formulas":0}
+]

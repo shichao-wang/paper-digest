@@ -14,6 +14,21 @@ type Item struct {
 	Summary Summary
 }
 
+// RenderMessages keeps each paper self-contained while the web history retains
+// the complete daily digest. An empty day still produces a single notice.
+func RenderMessages(date time.Time, items []Item) []string {
+	if len(items) == 0 {
+		return []string{Render(date, nil)}
+	}
+	messages := make([]string, 0, len(items))
+	for i, item := range items {
+		message := Render(date, []Item{item})
+		message = strings.Replace(message, "## 1. ", fmt.Sprintf("## %d/%d. ", i+1, len(items)), 1)
+		messages = append(messages, message)
+	}
+	return messages
+}
+
 func Render(date time.Time, items []Item) string {
 	var output strings.Builder
 	fmt.Fprintf(&output, "# arXiv 论文日报 · %s\n\n基于论文公开摘要整理，非全文解读。\n\n", date.Format("2006-01-02"))
@@ -67,7 +82,7 @@ func Render(date time.Time, items []Item) string {
 		}
 		output.WriteByte('\n')
 		if text := strings.TrimSpace(item.Summary.Text); text != "" {
-			output.WriteString(text)
+			output.WriteString(FormatSummary(text))
 			output.WriteString("\n\n")
 		} else {
 			output.WriteString("摘要暂不可用。\n\n")

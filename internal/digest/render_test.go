@@ -63,3 +63,10 @@ func TestRenderBuildsFallbackVersionURL(t *testing.T) {
 		t.Errorf("Render() missing fallback arXiv URL:\n%s", got)
 	}
 }
+
+func TestRenderFormatsStoredPlainLabels(t *testing.T) {
+	got := Render(time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC), []Item{{Paper: papers.Paper{ID: "arxiv:2610.01767", Title: "MatRAG"}, Summary: Summary{Text: "- 研究问题：多跳问答\n\n- 方法：分层检索"}}})
+	if !strings.Contains(got, "- **研究问题**：多跳问答") || !strings.Contains(got, "- **方法**：分层检索") {
+		t.Fatal(got)
+	}
+}

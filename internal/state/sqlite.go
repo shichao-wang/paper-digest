@@ -705,6 +705,31 @@ ON CONFLICT(topic, paper_id) DO NOTHING`, topic, date); err != nil {
 	return nil
 }
 
+// MarkPaperSent records each confirmed delivery immediately, so a later failure
+// in the batch cannot cause an already delivered paper to be selected tomorrow.
+func (s *Store) MarkPaperSent(ctx context.Context, topic, date, id string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var status string
+	if err := tx.QueryRowContext(ctx, `SELECT status FROM jobs WHERE topic = ? AND date = ?`, topic, date).Scan(&status); err != nil {
+		return err
+	}
+	if status != statusSending {
+		return ErrInvalidState
+	}
+	var version string
+	if err := tx.QueryRowContext(ctx, `SELECT version FROM job_papers WHERE topic = ? AND date = ? AND paper_id = ? AND summary IS NOT NULL`, topic, date, id).Scan(&version); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO recommendations(topic, paper_id, date, version) VALUES(?, ?, ?, ?) ON CONFLICT(topic, paper_id) DO NOTHING`, topic, id, date, version); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func (s *Store) MarkUnknown(ctx context.Context, topic, date string) error {
 	result, err := s.db.ExecContext(ctx, `
 UPDATE jobs SET status = ? WHERE topic = ? AND date = ? AND status IN (?, ?)`,
