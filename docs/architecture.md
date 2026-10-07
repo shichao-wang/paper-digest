@@ -49,7 +49,7 @@ paper-digest/
 | `GET /api/health` | HTTP + SQLite 查询健康，成功返回 `{"status":"ok"}` |
 | `GET /api/topics` | 主题 ID、显示名称与自动任务启用状态；不暴露 Webhook |
 | `GET /api/papers` | 支持 `q`、`date`、`summary`、`page`、`pageSize` 的论文列表 |
-| `GET /api/papers/detail?id=...` | 稳定 ID 对应详情；可用 `date` 定位当日版本 |
+| `GET /api/papers/detail?id=...&date=YYYY-MM-DD` | `id` 和 `date` 均必填；按稳定 ID 与日期定位当日版本，缺少或无效日期返回 400 |
 | `GET /api/digests` | 分页日报历史 |
 | `GET /api/digests/YYYY-MM-DD` | 当天完整日报与论文 |
 | `GET /api/settings/webhook` | 仅返回是否已配置及自动任务启用状态 |

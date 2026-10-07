@@ -84,7 +84,12 @@ digest_backup_name="digest-backup-$(date +%Y%m%d-%H%M%S).db"
 docker compose exec -T paper-digest paper-digest backup "/data/$digest_backup_name"
 docker compose cp "paper-digest:/data/$digest_backup_name" "backups/$digest_backup_name"
 chmod 600 "backups/$digest_backup_name"
-# 核对宿主机备份后，再删除容器中的临时备份文件
+```
+
+确认宿主机的 `backups/$digest_backup_name` 已成功复制、可读取且通过完整性核对后，在同一终端执行以下命令，只删除容器中的临时备份，保留宿主机副本：
+
+```bash
+docker compose exec -T paper-digest rm -- "/data/${digest_backup_name:?请先设置已核对的备份文件名}"
 ```
 
 备份文件包含论文摘要、发送历史和保存的 Webhook 密钥，不要上传至公开仓库。恢复时先停止容器，再将备份复制回 `database.path` 配置的路径（Compose 默认为数据卷内的 `/data/digest.db`），然后启动容器并检查 `status`；恢复演练应在隔离卷中进行，避免覆盖唯一副本。升级数据库结构前先备份并保留前一个镜像/代码版本以便回滚。
