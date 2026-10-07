@@ -23,6 +23,11 @@ type MarkdownSender interface {
 	SendMarkdown(context.Context, string) error
 }
 
+// MarkdownValidator checks the exact card payload without making a request.
+type MarkdownValidator interface {
+	ValidateMarkdown(string) error
+}
+
 // Preparer 在写入发送意图之前解析当前配置，避免配置缺失被记录为未知结果。
 type Preparer interface {
 	Prepare(context.Context) (Sender, error)
@@ -90,6 +95,14 @@ func (f Feishu) SendMarkdown(ctx context.Context, text string) error {
 	return f.send(ctx, payload)
 }
 
+func (f Feishu) ValidateMarkdown(text string) error {
+	payload, err := json.Marshal(markdownCard(text))
+	if err != nil {
+		return err
+	}
+	return f.validatePayload(payload)
+}
+
 func markdownCard(text string) map[string]any {
 	blocks := strings.SplitN(strings.TrimSpace(text), "\n\n", 5)
 	header := "arXiv 论文日报"
@@ -132,12 +145,19 @@ func markdownCard(text string) map[string]any {
 	}
 }
 
-func (f Feishu) send(ctx context.Context, payload []byte) error {
+func (f Feishu) validatePayload(payload []byte) error {
 	if err := config.ValidateWebhookURL(f.WebhookURL); err != nil {
 		return err
 	}
 	if len(payload) > 20*1024 {
 		return errors.New("飞书消息超过 20 KB 请求大小限制")
+	}
+	return nil
+}
+
+func (f Feishu) send(ctx context.Context, payload []byte) error {
+	if err := f.validatePayload(payload); err != nil {
+		return err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, f.WebhookURL, bytes.NewReader(payload))
 	if err != nil {

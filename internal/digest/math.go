@@ -34,6 +34,7 @@ func mathDelimiterAt(text string, index int) (string, string) {
 }
 
 func hasCompleteMath(text string) bool {
+	text = mathMarkdownText(text)
 	for index := 0; index < len(text); {
 		left, right := mathDelimiterAt(text, index)
 		if left == "" || (left == "$" && isCurrency(text, index)) {

@@ -118,6 +118,16 @@ func (r *Runner) Deliver(ctx context.Context, date string) error {
 		return err
 	}
 	messages := digest.RenderMessages(day, items)
+	if validator, ok := sender.(delivery.MarkdownValidator); ok {
+		for i, message := range messages {
+			if err := validator.ValidateMarkdown(message); err != nil {
+				return fmt.Errorf("第 %d/%d 条论文消息预检失败: %w", i+1, len(messages), err)
+			}
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	claimed, err := r.Store.ClaimSend(ctx, Topic, date)
 	if err != nil {
 		return err

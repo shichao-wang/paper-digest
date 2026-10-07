@@ -38,3 +38,32 @@ func TestClaudeAnalyzerMathDelimiters(t *testing.T) {
 		})
 	}
 }
+
+func TestMathIgnoresMarkdownLiteralRegions(t *testing.T) {
+	cases := []struct {
+		text     string
+		complete bool
+	}{
+		{"- **方法**：运行 `echo $HOME`", true},
+		{"使用 ``echo `$HOME` \\( \\[``，公式 $x$", true},
+		{"```sh\necho $HOME \\(\n```\n结果 $x$", true},
+		{"~~~~sh\necho $HOME\n~~~\n\\[\n~~~~\n结果 $x$", true},
+		{"```sh\necho $HOME", true},
+		{"    echo $HOME \\[\n\techo $PATH", true},
+		{`[代码](https://example.com/$HOME/a(b)/\[file "title")，结果 $x$`, true},
+		{`![图](<https://example.com/$HOME/\[file>)`, true},
+		{"[代码][ref]\n[ref]: https://example.com/$HOME/\\[file", true},
+		{`<https://example.com/$HOME/\[file>`, true},
+		{"`echo $HOME` 结果 $x", false},
+		{"```sh\necho $HOME\n```\n结果 \\[x", false},
+		{`[$x](https://example.com/$HOME)`, false},
+		{"未闭合 ` 文本 $x", false},
+	}
+	for _, test := range cases {
+		t.Run(test.text, func(t *testing.T) {
+			if got := hasCompleteMath(test.text); got != test.complete {
+				t.Fatalf("hasCompleteMath=%v, want %v", got, test.complete)
+			}
+		})
+	}
+}
