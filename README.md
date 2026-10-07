@@ -45,7 +45,7 @@ make preview # 仅渲染离线 fixture，不访问外部服务
 | 本地开发、离线演示、构建与验证 | [开发指南](docs/development.md) |
 | 部署、试发、调度状态、备份与故障定位 | [部署与运维](docs/operations.md) |
 | 数据流、API 和目录职责 | [运行与目录职责](docs/architecture.md) |
-| 提交改动与 CodeRabbit review | [贡献指南](CONTRIBUTING.md) |
+| 提交改动与 review | [贡献指南](CONTRIBUTING.md) |
 | 历史排查与文档维护约定 | [文档目录](docs/README.md) |
 
 仓库已有真实推送与本机排查记录；它们是特定日期的历史证据，不代表新部署完成验收。见 [2026-10-07 排查记录](docs/2026-10-07-delivery-investigation.md)。
