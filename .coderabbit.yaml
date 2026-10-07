@@ -1,0 +1,9 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: zh-CN
+reviews:
+  request_changes_workflow: true
+  allow_author_approval: false
+  review_progress: true
+  fail_commit_status: true
+  auto_review:
+    enabled: true
