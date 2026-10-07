@@ -222,3 +222,104 @@ func TestBeijingDateBoundary(t *testing.T) {
 		t.Fatalf("北京时间日期错误：%s", got)
 	}
 }
+
+func TestDeliverOneMessagePerPaperAndPreserveConfirmedPartialBatch(t *testing.T) {
+	for _, failSecond := range []bool{false, true} {
+		r := testRunner(t)
+		ctx := context.Background()
+		date := BeijingDate(r.Now())
+		r.Fetch = func(context.Context) ([]papers.Paper, error) {
+			return []papers.Paper{
+				{ID: "arxiv:2610.00001", Version: "v1", Title: "First Recommendation", Abstract: "recommendation", Published: r.Now().Add(-time.Hour)},
+				{ID: "arxiv:2610.00002", Version: "v1", Title: "Second Recommendation", Abstract: "recommendation", Published: r.Now().Add(-time.Hour)},
+			}, nil
+		}
+		if err := r.Generate(ctx, date); err != nil {
+			t.Fatal(err)
+		}
+		var messages []string
+		r.Sender = senderFunc(func(_ context.Context, message string) error {
+			messages = append(messages, message)
+			if len(messages) == 2 && failSecond {
+				return errors.New("timeout")
+			}
+			return nil
+		})
+		err := r.Deliver(ctx, date)
+		if (err != nil) != failSecond || len(messages) != 2 {
+			t.Fatalf("batch: %v, messages=%d", err, len(messages))
+		}
+		for i, message := range messages {
+			for j, id := range []string{"arxiv:2610.00001", "arxiv:2610.00002"} {
+				if strings.Contains(message, id) != (i == j) {
+					t.Fatalf("message %d contains wrong paper: %s", i, message)
+				}
+			}
+			if !strings.Contains(message, "2026-09-27") {
+				t.Fatal("missing digest date")
+			}
+		}
+		first, _ := r.Store.Seen(ctx, Topic, "arxiv:2610.00001")
+		second, _ := r.Store.Seen(ctx, Topic, "arxiv:2610.00002")
+		if !first || second == failSecond {
+			t.Fatalf("confirmed delivery history lost: %v %v", first, second)
+		}
+		want := "sent"
+		if failSecond {
+			want = "unknown"
+		}
+		if jobStatus(t, r, date) != want {
+			t.Fatal("incorrect batch status")
+		}
+		if err := r.Deliver(ctx, date); err == nil || len(messages) != 2 {
+			t.Fatal("batch must not automatically replay")
+		}
+	}
+}
+
+func TestOversizedLaterCardRejectsWholeBatchBeforeClaim(t *testing.T) {
+	r := testRunner(t)
+	ctx := context.Background()
+	date := BeijingDate(r.Now())
+	r.Fetch = func(context.Context) ([]papers.Paper, error) {
+		return []papers.Paper{
+			{ID: "arxiv:2610.00001", Title: "First Recommendation", Abstract: "recommendation", Published: r.Now()},
+			{ID: "arxiv:2610.00002", Title: "Second Recommendation", Abstract: "recommendation", Published: r.Now()},
+		}, nil
+	}
+	r.Analyzer = analyzerFunc(func(_ context.Context, paper papers.Paper) (digest.Summary, error) {
+		text := "方法：正常摘要"
+		if paper.ID == "arxiv:2610.00002" {
+			text = strings.Repeat("中", 7000)
+		}
+		return digest.Summary{Text: text}, nil
+	})
+	if err := r.Generate(ctx, date); err != nil {
+		t.Fatal(err)
+	}
+	requests := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		requests++
+		_, _ = w.Write([]byte(`{"code":0}`))
+	}))
+	defer server.Close()
+	if err := r.Store.SetWebhook(ctx, Topic, server.URL); err != nil {
+		t.Fatal(err)
+	}
+	r.Sender = delivery.StoredFeishu{Store: r.Store, Topic: Topic, Client: server.Client()}
+	for attempt := 0; attempt < 2; attempt++ {
+		err := r.Deliver(ctx, date)
+		if err == nil || !strings.Contains(err.Error(), "第 2/2") || !strings.Contains(err.Error(), "20 KB") {
+			t.Fatalf("expected second card preflight rejection: %v", err)
+		}
+		if requests != 0 || jobStatus(t, r, date) != "ready" {
+			t.Fatalf("local rejection must remain ready without any requests: requests=%d", requests)
+		}
+	}
+	for _, id := range []string{"arxiv:2610.00001", "arxiv:2610.00002"} {
+		seen, err := r.Store.Seen(ctx, Topic, id)
+		if err != nil || seen {
+			t.Fatalf("unsent paper recorded: seen=%v err=%v", seen, err)
+		}
+	}
+}

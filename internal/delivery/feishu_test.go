@@ -69,3 +69,111 @@ func TestFeishuRejectsUnsafeURLAndErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestFeishuMarkdownUsesWebhookCard(t *testing.T) {
+	text := "# 论文日报\n\n基于论文公开摘要整理，非全文解读。\n\n## 1/2. Title\n\n- 原文：[arxiv:2610.01234](https://arxiv.org/abs/2610.01234)\n- 作者：Alice\n\n- 研究问题：测试\n\n- **结果**：有效\n"
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Type string `json:"msg_type"`
+			Card struct {
+				Schema string `json:"schema"`
+				Header struct {
+					Title struct {
+						Content string `json:"content"`
+					} `json:"title"`
+				} `json:"header"`
+				Body struct {
+					Elements []json.RawMessage `json:"elements"`
+				} `json:"body"`
+			} `json:"card"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.Type != "interactive" || payload.Card.Schema != "2.0" || payload.Card.Header.Title.Content != "论文日报" || len(payload.Card.Body.Elements) != 4 {
+			t.Fatalf("invalid webhook card: %+v", payload)
+		}
+		raw, _ := json.Marshal(payload)
+		for _, want := range []string{"column_set", "https://arxiv.org/abs/2610.01234", "研究问题", "结果", "heading-2"} {
+			if !strings.Contains(string(raw), want) {
+				t.Errorf("card lost %s", want)
+			}
+		}
+		var summary struct {
+			Content string `json:"content"`
+		}
+		if err := json.Unmarshal(payload.Card.Body.Elements[3], &summary); err != nil {
+			t.Fatal(err)
+		}
+		if summary.Content != "- **研究问题**：测试\n\n- **结果**：有效" {
+			t.Errorf("summary formatting lost: %q", summary.Content)
+		}
+		_, _ = w.Write([]byte(`{"code":0}`))
+	}))
+	defer server.Close()
+	if err := (Feishu{WebhookURL: server.URL, Client: server.Client()}).SendMarkdown(context.Background(), text); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFeishuRejectsOversizedPayloadWithoutRequest(t *testing.T) {
+	client := &http.Client{Transport: transportFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("oversized payload must not reach the robot")
+		return nil, nil
+	})}
+	if err := (Feishu{WebhookURL: "https://example.invalid/secret", Client: client}).SendMarkdown(context.Background(), strings.Repeat("中", 7000)); err == nil {
+		t.Fatal("expected size limit")
+	}
+}
+
+func TestFeishuCardEscapesMentionTagsInAllMarkdown(t *testing.T) {
+	text := "# 日报\n\n说明\n\n## <at id=all></at> Title\n\n- 原文：[论文](https://arxiv.org/abs/2610.00001)\n- 作者：<AT id=someone></AT>\n\n- **方法**：<at id=all></at> 与 <at id=someone>姓名</at>，结果 $x$"
+	requests := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		var contents []string
+		var check func(any)
+		check = func(value any) {
+			switch value := value.(type) {
+			case map[string]any:
+				if value["tag"] == "markdown" {
+					content := value["content"].(string)
+					contents = append(contents, content)
+					if strings.Contains(strings.ToLower(content), "<at") || strings.Contains(strings.ToLower(content), "</at") {
+						t.Errorf("active mention in card: %q", content)
+					}
+				}
+				for _, child := range value {
+					check(child)
+				}
+			case []any:
+				for _, child := range value {
+					check(child)
+				}
+			}
+		}
+		check(payload)
+		raw := strings.Join(contents, "\n")
+		for _, want := range []string{"**方法**", "https://arxiv.org/abs/2610.00001", "$x$", "姓名", "&lt;at id=all&gt;"} {
+			if !strings.Contains(raw, want) {
+				t.Errorf("lost formatting or escaped mention: %s", want)
+			}
+		}
+		_, _ = w.Write([]byte(`{"code":0}`))
+	}))
+	defer server.Close()
+	sender := Feishu{WebhookURL: server.URL, Client: server.Client()}
+	if err := sender.ValidateMarkdown(text); err != nil {
+		t.Fatal(err)
+	}
+	if err := sender.SendMarkdown(context.Background(), text); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests=%d", requests)
+	}
+}

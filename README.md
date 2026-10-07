@@ -1,6 +1,6 @@
 # 论文日报
 
-本机 Docker Compose 运行的 Go 服务：每天北京时间 08:00 搜集 Recommendation / Advertising / Search **联合主题**的 arXiv 新论文，根据公开摘要生成中文要点；09:00 仅在日报完整就绪时，通过飞书群机器人 Webhook 发送一份日报。第一版不抓取全文、项目页或解读网页；历史论文、摘要版本、任务与发送状态保存在 SQLite 中。浏览器中的「论文库」提供已有每日精选的检索、摘要阅读和日报历史。
+本机 Docker Compose 运行的 Go 服务：每天北京时间 08:00 搜集 Recommendation / Advertising / Search **联合主题**的 arXiv 新论文，根据公开摘要生成中文要点；09:00 仅在日报完整就绪时，通过飞书群机器人 Webhook 每篇论文发送一张 Markdown 卡片。第一版不抓取全文、项目页或解读网页；历史论文、摘要版本、任务与发送状态保存在 SQLite 中。浏览器中的「论文库」提供已有每日精选的检索、摘要阅读和日报历史。
 
 > 默认 **不调用模型、不发送飞书**。须自行确认目标群、机器人身份、内容及模型费用后，在未跟踪的 `config/config.json` 中设置 `delivery.enabled=true` 才启用实际任务。现阶段没有做过真实发送或 09:00 投递验收。
 
@@ -106,7 +106,7 @@ docker compose exec -T paper-digest paper-digest send-test --topic recommendatio
 ## 运行语义
 
 - 08:00～09:00 创建或恢复当天任务；单 worker 逐篇生成，最多 5 篇。重启后在 09:00 前继续；09:00 后启动不会自动补发。
-- 09:00 仅发送 `ready` 的完整日报；未就绪记 `missed`。发送前持久化意图，只有飞书明确成功才记 `sent`；超时、异常退出等记 `unknown`，**不自动重发**，须先去目标群核对。
+- 09:00 仅发送 `ready` 的完整日报，每篇论文一张飞书 Markdown 卡片；空日报发送一条提示。未就绪记 `missed`。发送前持久化整批意图，每篇确认成功后立即记录推荐历史，全部成功才记 `sent`；中途失败停止后续发送并记 `unknown`，**不自动重发整批**，须先去目标群核对。
 - 论文 ID 使用不含 arXiv 版本号的稳定 ID；只有确认送达后才记已推荐。生成依据是公开原摘要，日报会明确标注，不能视为论文全文解读。
 - `Asia/Shanghai` 在程序中明确指定，不依赖容器时区环境变量。若机器休眠/断电/断网，不能保证 09:00 送达；请自行监控日志中的 `missed` / `unknown` 并保持 Docker Desktop 开机。
 
@@ -134,3 +134,9 @@ docker compose cp paper-digest:/data/digest-backup.db ./digest-backup.db
 - `web/`：论文库、详情阅读、日报历史与 Webhook 设置的 React 页面。
 
 本项目是 `repos/` 下的独立 Git 仓库；请始终在本目录内操作 Git，不要将其内容加入 `personal-workspace` 主仓库历史。创建公开远端仓库和推送由所有者另行决定。
+
+2026-10-07 的消息格式修复、本机服务更新及停推证据见 [排查记录](docs/2026-10-07-delivery-investigation.md)。
+
+摘要要点统一为 `- **标签**：正文`。新生成摘要使用 `arxiv-summary-v2` 提示；历史摘要在组装日报和发送卡片时自动补齐开头标签加粗，保留正文、链接、代码与公式，不改写历史摘要存档。公式完整性校验跳过 Markdown 代码和链接目标。
+
+发送前会预检整批卡片的实际 JSON 请求体；任一卡片超过 20KB 时整批不发送，日报保持 `ready`，不会因本地大小校验失败进入 `unknown`。
