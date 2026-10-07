@@ -8,3 +8,5 @@ backups
 web/node_modules
 web/dist
 web/*.tsbuildinfo
+config/config.local.json
+bin
