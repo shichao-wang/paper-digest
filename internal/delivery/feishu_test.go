@@ -14,20 +14,22 @@ type transportFunc func(*http.Request) (*http.Response, error)
 
 func (f transportFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-func TestFeishuErrorsNeverExposeWebhook(t *testing.T) {
+func TestFeishuRejectsInvalidWebhookWithoutExposure(t *testing.T) {
 	for _, webhook := range []string{"http://example.invalid/secret", "https://user:secret@example.invalid", "https://example.invalid/#secret"} {
 		if err := (Feishu{WebhookURL: webhook}).Send(context.Background(), "x"); err == nil || strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), webhook) {
 			t.Fatalf("无效URL泄漏: %v", err)
 		}
 	}
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{"code":19001,"msg":"secret"}`)) }))
-	defer server.Close()
-	webhook := server.URL + "/secret"
-	for _, client := range []*http.Client{server.Client(), {Transport: transportFunc(func(*http.Request) (*http.Response, error) { return nil, errors.New(webhook) })}} {
-		err := (Feishu{WebhookURL: webhook, Client: client}).Send(context.Background(), "x")
-		if err == nil || strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), server.URL) {
-			t.Fatalf("失败响应或网络错误泄漏: %v", err)
-		}
+}
+
+func TestFeishuPreservesNetworkError(t *testing.T) {
+	original := errors.New("connection reset by peer")
+	client := &http.Client{Transport: transportFunc(func(*http.Request) (*http.Response, error) {
+		return nil, original
+	})}
+	err := (Feishu{WebhookURL: "https://example.invalid/secret", Client: client}).Send(context.Background(), "x")
+	if !errors.Is(err, original) || !strings.Contains(err.Error(), original.Error()) {
+		t.Fatalf("original network error lost: %v", err)
 	}
 }
 
@@ -67,6 +69,39 @@ func TestFeishuRejectsUnsafeURLAndErrors(t *testing.T) {
 		if err == nil {
 			t.Fatalf("未确认成功的响应被当作成功：%s", response)
 		}
+	}
+}
+
+func TestFeishuFailureDiagnostics(t *testing.T) {
+	for _, tc := range []struct {
+		name, response string
+		status         int
+		want           []string
+	}{
+		{"business rejection", `{"code":19001,"msg":"frequency limited"}`, 200, []string{"HTTP 200", `\"code\":19001`, "frequency limited"}},
+		{"http rejection", `{"code":999,"msg":"unavailable"}`, 503, []string{"HTTP 503", `\"code\":999`, "unavailable"}},
+		{"missing code", `{"msg":"missing code"}`, 200, []string{"missing code"}},
+		{"invalid json", `secret not json`, 200, []string{"secret not json"}},
+		{"empty response", ``, 200, []string{`response=""`}},
+		{"truncated response", `{"code":`, 200, []string{`{\"code\":`}},
+		{"wrong code type", `{"code":"secret"}`, 200, []string{`\"code\":\"secret\"`}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.response))
+			}))
+			defer server.Close()
+			err := (Feishu{WebhookURL: server.URL + "/secret", Client: server.Client()}).Send(context.Background(), "x")
+			if err == nil {
+				t.Fatal("expected failure")
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("missing %q in %s", want, err)
+				}
+			}
+		})
 	}
 }
 
