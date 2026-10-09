@@ -112,8 +112,8 @@ func TestDatabaseSenderResolvesBeforeClaimAndUpdatesDynamically(t *testing.T) {
 	}
 	server.Close()
 	err := r.Deliver(ctx, failedDate)
-	if err == nil || strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), server.URL) || jobStatus(t, r, failedDate) != "unknown" {
-		t.Fatalf("动态发送失败必须保持防重发且错误不泄漏: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "connection refused") || jobStatus(t, r, failedDate) != "unknown" {
+		t.Fatalf("动态发送失败必须保持防重发且保留原始错误: %v", err)
 	}
 	if err := r.Deliver(ctx, failedDate); err == nil || jobStatus(t, r, failedDate) != "unknown" {
 		t.Fatal("unknown不得重试")

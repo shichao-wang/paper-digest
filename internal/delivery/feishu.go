@@ -181,15 +181,15 @@ func (f Feishu) send(ctx context.Context, payload []byte) error {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		// 不包装底层网络错误：URL 中可能包含 Webhook 密钥。
-		return errors.New("飞书响应未知，请核对群消息后处理")
+		return fmt.Errorf("飞书响应未知，请核对群消息后处理: %w", err)
 	}
 	defer resp.Body.Close()
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	var result struct {
 		Code *int `json:"code"`
 	}
-	if resp.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&result) != nil || result.Code == nil || *result.Code != 0 {
-		return fmt.Errorf("飞书未确认成功（HTTP %d），请人工核对", resp.StatusCode)
+	if resp.StatusCode != http.StatusOK || readErr != nil || json.Unmarshal(body, &result) != nil || result.Code == nil || *result.Code != 0 {
+		return fmt.Errorf("飞书未确认成功（HTTP %d, response=%q, read_error=%v），请人工核对", resp.StatusCode, string(body), readErr)
 	}
 	return nil
 }
