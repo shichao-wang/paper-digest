@@ -12,24 +12,30 @@ import (
 	"time"
 
 	"github.com/shichao-wang/paper-digest/internal/eval"
-	"github.com/shichao-wang/paper-digest/internal/job"
 	"github.com/shichao-wang/paper-digest/internal/papers"
 	"github.com/shichao-wang/paper-digest/internal/state"
 )
 
-func defaultEvalFetch(ctx context.Context, since time.Time) ([]papers.Paper, error) {
-	return papers.FetchSince(ctx, &http.Client{Timeout: 45 * time.Second}, "", since)
+func defaultEvalFetch(ctx context.Context, since time.Time, searchQuery string) ([]papers.Paper, error) {
+	return papers.FetchSince(ctx, &http.Client{Timeout: 45 * time.Second}, "", since, searchQuery)
 }
 
 func (s *server) evalAPI(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/api/eval":
+		if r.Method != http.MethodGet && r.Method != http.MethodPost {
+			w.Header().Set("Allow", "GET, POST")
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		s.evalPreview(w, r)
+	case "/api/eval/rules":
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", "GET")
 			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
-		s.evalPreview(w, r)
+		s.evalRules(w, r)
 	case "/api/eval/labels":
 		if r.Method != http.MethodPut {
 			w.Header().Set("Allow", "PUT")
@@ -51,12 +57,35 @@ func (s *server) evalAPI(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *server) evalPreview(w http.ResponseWriter, r *http.Request) {
-	topic, ok := s.requireJointTopic(w, r)
+func (s *server) evalRules(w http.ResponseWriter, r *http.Request) {
+	topic, rules, ok := s.requireSelection(w, r)
 	if !ok {
 		return
 	}
-	dates, err := eval.Dates(r.URL.Query().Get("date"), r.URL.Query().Get("to"))
+	_ = rules
+	writeJSON(w, http.StatusOK, s.selections[topic.ID])
+}
+
+func (s *server) evalPreview(w http.ResponseWriter, r *http.Request) {
+	topic, active, ok := s.requireSelection(w, r)
+	if !ok {
+		return
+	}
+	var draft *papers.Rules
+	date, end := r.URL.Query().Get("date"), r.URL.Query().Get("to")
+	if r.Method == http.MethodPost {
+		if !sameOrigin(r) {
+			writeError(w, http.StatusForbidden, "same-origin request required")
+			return
+		}
+		parsedDate, parsedEnd, compiled, err := decodeDraft(w, r)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		date, end, draft = parsedDate, parsedEnd, &compiled
+	}
+	dates, err := eval.Dates(date, end)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid query parameters")
 		return
@@ -72,8 +101,12 @@ func (s *server) evalPreview(w http.ResponseWriter, r *http.Request) {
 	if fetch == nil {
 		fetch = defaultEvalFetch
 	}
+	query := active.Query
+	if draft != nil {
+		query = papers.OrQuery(active.Query, draft.Query)
+	}
 	since := cutoff.Add(-time.Duration(s.lookbackDays) * 24 * time.Hour)
-	fetched, err := fetch(ctx, since)
+	fetched, err := fetch(ctx, since, query)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "service unavailable")
 		return
@@ -83,7 +116,7 @@ func (s *server) evalPreview(w http.ResponseWriter, r *http.Request) {
 		writeStatus(w, err)
 		return
 	}
-	report, err := eval.Build(topic.ID, dates, s.lookbackDays, fetched, sent, labels)
+	report, err := eval.Build(topic.ID, dates, s.lookbackDays, active, draft, fetched, sent, labels)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "service unavailable")
 		return
@@ -91,12 +124,42 @@ func (s *server) evalPreview(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, report)
 }
 
+func decodeDraft(w http.ResponseWriter, r *http.Request) (string, string, papers.Rules, error) {
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		return "", "", papers.Rules{}, errors.New("application/json required")
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 256<<10)
+	var body struct {
+		Date  string          `json:"date"`
+		To    string          `json:"to"`
+		Rules json.RawMessage `json:"rules"`
+	}
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&body); err != nil {
+		return "", "", papers.Rules{}, errors.New("invalid query parameters")
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return "", "", papers.Rules{}, errors.New("invalid query parameters")
+	}
+	spec, err := papers.ParseSelection(body.Rules)
+	if err != nil {
+		return "", "", papers.Rules{}, err
+	}
+	compiled, err := papers.Compile(spec)
+	if err != nil {
+		return "", "", papers.Rules{}, err
+	}
+	return body.Date, body.To, compiled, nil
+}
+
 func (s *server) evalLabel(w http.ResponseWriter, r *http.Request) {
 	if !sameOrigin(r) {
 		writeError(w, http.StatusForbidden, "same-origin request required")
 		return
 	}
-	topic, ok := s.requireJointTopic(w, r)
+	topic, _, ok := s.requireSelection(w, r)
 	if !ok {
 		return
 	}
@@ -156,7 +219,7 @@ func (s *server) evalLabel(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) evalFixtures(w http.ResponseWriter, r *http.Request) {
-	topic, ok := s.requireJointTopic(w, r)
+	topic, _, ok := s.requireSelection(w, r)
 	if !ok {
 		return
 	}
@@ -177,16 +240,17 @@ func (s *server) evalFixtures(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, fixtures)
 }
 
-func (s *server) requireJointTopic(w http.ResponseWriter, r *http.Request) (topicRecord, bool) {
+func (s *server) requireSelection(w http.ResponseWriter, r *http.Request) (topicRecord, papers.Rules, bool) {
 	topic, ok := s.selectTopic(w, r)
 	if !ok {
-		return topicRecord{}, false
+		return topicRecord{}, papers.Rules{}, false
 	}
-	if topic.ID != job.Topic {
-		writeError(w, http.StatusBadRequest, "selection rules apply only to the joint topic")
-		return topicRecord{}, false
+	rules, exists := s.rules[topic.ID]
+	if !exists || !rules.Active() {
+		writeError(w, http.StatusBadRequest, "selection rules are not configured for this topic")
+		return topicRecord{}, papers.Rules{}, false
 	}
-	return topic, true
+	return topic, rules, true
 }
 
 func (s *server) evalContext(ctx context.Context, topic string, dates []string) (map[string]string, map[string][]eval.SentPaper, error) {

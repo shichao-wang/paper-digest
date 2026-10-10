@@ -29,7 +29,7 @@ Compose 仅运行一个副本，不要扩为多个定时 worker。宿主机、Do
 docker compose up -d --force-recreate paper-digest
 ```
 
-页面修改 Webhook 无需重启。仅更改 Compose 运行参数通常只需 `docker compose up -d`。停用自动任务可将 `delivery.enabled` 设为 `false` 后重新创建容器；这同时关闭采集和模型调用。`docker compose stop` 停止全部服务，`docker compose down` 移除容器和网络、保留命名卷；**不要运行 `docker compose down -v`，它会删除数据**。不同项目名会得到不同命名卷，迁移目录或加 `-p` 前须核对原卷。
+筛选规则在 `topics[].selection`。改规则时编辑宿主机上的 `config.json`，然后用上面的命令重新创建容器，不要加 `--build`。配置是只读挂载，没有热加载，重启后下一次日报才会使用新规则。页面修改 Webhook 无需重启。仅更改 Compose 运行参数通常只需 `docker compose up -d`。停用自动任务可将 `delivery.enabled` 设为 `false` 后重新创建容器；这同时关闭采集和模型调用。`docker compose stop` 停止全部服务，`docker compose down` 移除容器和网络、保留命名卷；**不要运行 `docker compose down -v`，它会删除数据**。不同项目名会得到不同命名卷，迁移目录或加 `-p` 前须核对原卷。
 
 ## 受控飞书试发
 

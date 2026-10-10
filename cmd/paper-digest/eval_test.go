@@ -20,7 +20,7 @@ import (
 func TestEvalPreviewLabelsAndFixturesDoNotTouchDigestState(t *testing.T) {
 	originalFetch := fetchEvalPapers
 	t.Cleanup(func() { fetchEvalPapers = originalFetch })
-	fetchEvalPapers = func(context.Context, time.Time) ([]papers.Paper, error) {
+	fetchEvalPapers = func(context.Context, time.Time, string) ([]papers.Paper, error) {
 		t.Fatal("offline preview fetched arXiv")
 		return nil, nil
 	}
@@ -145,8 +145,71 @@ func TestEvalRejectsBadDatesBeforeOpeningTheDatabase(t *testing.T) {
 	if err := run([]string{"--config", missing, "eval", "--date", "2026-10-09"}); err == nil || !strings.Contains(err.Error(), "读取配置文件失败") {
 		t.Fatalf("missing config err = %v", err)
 	}
-	if err := run(configArgs(t, filepath.Join(t.TempDir(), "digest.db"), "", "", false, "eval", "--topic", "another", "--date", "2026-10-09")); err == nil || !strings.Contains(err.Error(), "recommendation-advertising-search") {
+	if err := run(configArgs(t, filepath.Join(t.TempDir(), "digest.db"), "", "", false, "eval", "--topic", "another", "--date", "2026-10-09")); err == nil || !strings.Contains(err.Error(), "没有筛选规则") {
 		t.Fatalf("other topic err = %v", err)
+	}
+}
+
+func TestEvalDraftRulesDoNotRewriteConfigOrCreateJobs(t *testing.T) {
+	dir := t.TempDir()
+	database := filepath.Join(dir, "digest.db")
+	configPath := filepath.Join(dir, "config.json")
+	configBody := `{"database":{"path":"` + database + `"},"arxiv":{"lookback_days":7},"topics":[{"id":"recommendation-advertising-search"}]}`
+	if err := os.WriteFile(configPath, []byte(configBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rulesPath := filepath.Join(dir, "candidate.json")
+	rulesBody := `{"max_papers":5,"min_tier":1,"query":{"categories":["cs.LG"]},"signals":[{"name":"title:hit","pattern":"\\bzzzz-no-match\\b","fields":["title"],"tier":2}],"decisions":[{"tier":2,"reason":"title match","min_signal_tier":2}],"fallback_reason":"no topic signal"}`
+	if err := os.WriteFile(rulesPath, []byte(rulesBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	input := filepath.Join(dir, "papers.json")
+	papersBody := `[{"ID":"arxiv:strong","Title":"Sequential Recommendation","Abstract":"session logs","Published":"2026-10-07T17:38:35Z","URL":"https://arxiv.org/abs/strong","categories":["cs.IR"]}]`
+	if err := os.WriteFile(input, []byte(papersBody), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	text, err := captureStdout(t, func() error {
+		return run([]string{"--config", configPath, "eval", "--date", "2026-10-09", "--input", input, "--rules", rulesPath})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(text, "草稿入选 0 篇") || !strings.Contains(text, "草稿规则不会写回配置") || !strings.Contains(text, "仅当前规则（草稿未入选）") || !strings.Contains(text, "arxiv:strong") {
+		t.Fatalf("draft preview = %s", text)
+	}
+	after, err := os.ReadFile(configPath)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("config changed:\n%s", after)
+	}
+	store, err := state.Open(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := store.GetJob(context.Background(), job.Topic, "2026-10-09"); !errors.Is(err, state.ErrJobNotFound) {
+		t.Fatalf("draft eval created a job: %v", err)
+	}
+
+	missingDB := filepath.Join(t.TempDir(), "missing.db")
+	rulesConfig := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(rulesConfig, []byte(`{"database":{"path":"`+missingDB+`"},"arxiv":{"lookback_days":7},"topics":[{"id":"recommendation-advertising-search"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	printed, err := captureStdout(t, func() error {
+		return run([]string{"--config", rulesConfig, "eval", "rules"})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(printed, `"max_papers": 5`) || !strings.Contains(printed, `"fallback_reason"`) {
+		t.Fatalf("eval rules = %s", printed)
+	}
+	if _, err := os.Stat(missingDB); !os.IsNotExist(err) {
+		t.Fatal("eval rules opened the database")
 	}
 }
 

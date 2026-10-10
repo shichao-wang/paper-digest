@@ -190,7 +190,7 @@ func TestFetchSinceStopsAtLookbackAndKeepsPagingAfterUpdates(t *testing.T) {
 	defer server.Close()
 
 	since := time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC)
-	got, err := FetchSince(context.Background(), server.Client(), server.URL, since)
+	got, err := FetchSince(context.Background(), server.Client(), server.URL, since, DefaultRules().Query)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +211,7 @@ func TestFetchSinceStopsOnShortPageAndCancel(t *testing.T) {
 			fmt.Fprintf(w, `<feed xmlns="http://www.w3.org/2005/Atom">%s</feed>`, atomEntryXML("2401.00010", "2026-10-08T00:00:00Z", "", "Only one"))
 		}))
 		defer server.Close()
-		got, err := FetchSince(context.Background(), server.Client(), server.URL, time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))
+		got, err := FetchSince(context.Background(), server.Client(), server.URL, time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), DefaultRules().Query)
 		if err != nil || len(got) != 1 || calls != 1 {
 			t.Fatalf("got %d papers, calls %d, err %v", len(got), calls, err)
 		}
@@ -230,7 +230,7 @@ func TestFetchSinceStopsOnShortPageAndCancel(t *testing.T) {
 			fmt.Fprintf(w, `<feed xmlns="http://www.w3.org/2005/Atom">%s</feed>`, atomEntryXML("2401.00011", "2026-10-08T00:00:00Z", "", "One"))
 		}))
 		defer server.Close()
-		_, err := FetchSince(ctx, server.Client(), server.URL, time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))
+		_, err := FetchSince(ctx, server.Client(), server.URL, time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), DefaultRules().Query)
 		if err == nil || calls != 1 {
 			t.Fatalf("err = %v, calls = %d, want cancellation after the first page", err, calls)
 		}
@@ -258,7 +258,7 @@ func TestSelectFiltersAndCapsResults(t *testing.T) {
 		return id == "already-seen"
 	}
 
-	got := Select(papers, now, 7, 50, seen)
+	got := Select(papers, now, 7, DefaultRules(), seen)
 	if len(got) != maxDailyPapers {
 		t.Fatalf("Select() returned %d papers, want cap %d", len(got), maxDailyPapers)
 	}
@@ -287,7 +287,7 @@ func TestSelectUsesUnionOfRASTopics(t *testing.T) {
 		{ID: "advertising-only", Published: now, Title: "Online advertising auction design"},
 		{ID: "search-only", Published: now, Title: "Search engine query processing"},
 		{ID: "unrelated", Published: now, Title: "Research on molecular embeddings"},
-	}, now, 7, 5, nil)
+	}, now, 7, DefaultRules(), nil)
 	if len(got) != 5 {
 		t.Fatalf("Select() returned %d papers, want 5 papers matching the RAS union", len(got))
 	}

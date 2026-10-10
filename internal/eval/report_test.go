@@ -56,7 +56,7 @@ func TestBuildComparesCurrentLooseAndSentWithoutUsingLabelsOutsideSelection(t *t
 	}
 	labels := map[string]string{strong.ID: LabelRelevant, weak.ID: LabelNotRelevant}
 
-	report, err := Build("recommendation-advertising-search", []string{"2026-10-09"}, 7, fetched, sent, labels)
+	report, err := Build("recommendation-advertising-search", []string{"2026-10-09"}, 7, papers.DefaultRules(), nil, fetched, sent, labels)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestBuildComparesCurrentLooseAndSentWithoutUsingLabelsOutsideSelection(t *t
 		t.Fatalf("format = %s", text)
 	}
 
-	unlabeled, err := Build("recommendation-advertising-search", []string{"2026-10-09"}, 7, fetched, nil, nil)
+	unlabeled, err := Build("recommendation-advertising-search", []string{"2026-10-09"}, 7, papers.DefaultRules(), nil, fetched, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestBuildComparesCurrentLooseAndSentWithoutUsingLabelsOutsideSelection(t *t
 	if !strings.Contains(Format(unlabeled), "精确率暂无") {
 		t.Fatal(Format(unlabeled))
 	}
-	if _, err := Build("topic", []string{"2026-10-09"}, 0, nil, nil, nil); err == nil {
+	if _, err := Build("topic", []string{"2026-10-09"}, 0, papers.DefaultRules(), nil, nil, nil, nil); err == nil {
 		t.Fatal("lookback 0 was accepted")
 	}
 }

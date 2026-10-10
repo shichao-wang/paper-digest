@@ -1,9 +1,341 @@
 {
-  "database": {"path": "/data/digest.db"},
-  "delivery": {"enabled": false},
-  "anthropic": {"api_key": "", "model": "claude-opus-5", "base_url": ""},
-  "arxiv": {"lookback_days": 7},
+  "database": {
+    "path": "/data/digest.db"
+  },
+  "delivery": {
+    "enabled": false
+  },
+  "anthropic": {
+    "api_key": "",
+    "model": "claude-opus-5",
+    "base_url": ""
+  },
+  "arxiv": {
+    "lookback_days": 7
+  },
   "topics": [
-    {"id": "recommendation-advertising-search"}
+    {
+      "id": "recommendation-advertising-search",
+      "selection": {
+        "max_papers": 5,
+        "min_tier": 1,
+        "query": {
+          "categories": [
+            "cs.IR"
+          ],
+          "terms": [
+            {
+              "field": "title",
+              "text": "recommender"
+            },
+            {
+              "field": "title",
+              "text": "recommendation"
+            },
+            {
+              "field": "abstract",
+              "text": "recommender"
+            },
+            {
+              "field": "abstract",
+              "text": "collaborative filtering"
+            },
+            {
+              "field": "title",
+              "text": "advertising"
+            },
+            {
+              "field": "title",
+              "text": "advertisement"
+            },
+            {
+              "field": "title",
+              "text": "advertiser"
+            },
+            {
+              "field": "abstract",
+              "text": "advertising"
+            },
+            {
+              "field": "abstract",
+              "text": "click-through"
+            },
+            {
+              "field": "abstract",
+              "text": "sponsored search"
+            },
+            {
+              "field": "abstract",
+              "text": "ad auction"
+            },
+            {
+              "field": "abstract",
+              "text": "ad allocation"
+            },
+            {
+              "field": "abstract",
+              "text": "ad ranking"
+            },
+            {
+              "field": "abstract",
+              "text": "ad targeting"
+            },
+            {
+              "field": "title",
+              "text": "retrieval"
+            },
+            {
+              "field": "abstract",
+              "text": "information retrieval"
+            },
+            {
+              "field": "abstract",
+              "text": "document retrieval"
+            },
+            {
+              "field": "abstract",
+              "text": "dense retrieval"
+            },
+            {
+              "field": "abstract",
+              "text": "query understanding"
+            },
+            {
+              "field": "abstract",
+              "text": "query rewriting"
+            },
+            {
+              "field": "abstract",
+              "text": "learning to rank"
+            },
+            {
+              "field": "title",
+              "text": "web search"
+            },
+            {
+              "field": "title",
+              "text": "search engine"
+            },
+            {
+              "field": "title",
+              "text": "conversational search"
+            },
+            {
+              "field": "abstract",
+              "text": "search ranking"
+            },
+            {
+              "field": "abstract",
+              "text": "sequential recommendation"
+            }
+          ]
+        },
+        "masks": [
+          {
+            "name": "excluded:private-information-retrieval",
+            "remove": "private information retrieval"
+          },
+          {
+            "name": "excluded:dna-storage",
+            "remove": "data retrieval",
+            "when": {
+              "all": [
+                {
+                  "contains": "dna"
+                },
+                {
+                  "any": [
+                    {
+                      "contains": "data storage"
+                    },
+                    {
+                      "pattern": "\\bpir\\b"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        ],
+        "signals": [
+          {
+            "name": "title:recommendation",
+            "pattern": "\\brecommender(s)?\\b|\\brecommendation(s)?\\b|\\bcollaborative filtering\\b",
+            "fields": [
+              "title"
+            ],
+            "tier": 2
+          },
+          {
+            "name": "title:advertising",
+            "pattern": "\\badvertising\\b|\\badvertisement(s)?\\b|\\badvertiser(s)?\\b|\\bclick[- ]through\\b|\\bsponsored (search|ad|ads|advertisement|advertisements)\\b|\\bonline ads?\\b|\\bad (click|auction|auctions|allocation|ranking|targeting|placement)s?\\b",
+            "fields": [
+              "title"
+            ],
+            "tier": 2
+          },
+          {
+            "name": "title:search",
+            "pattern": "\\binformation retrieval\\b|\\b(document|dense|sparse|passage|neural|generative|multimodal|visual|semantic|cross-modal|cross modal) retrieval\\b|\\b(web|conversational|sponsored|semantic|neural|personalized|product|e-commerce|ecommerce) search\\b|\\bsearch (engine|engines|ranking|result|results|query|queries|system|systems)\\b|\\bquery (rewriting|understanding|expansion|processing|reformulation)\\b|\\blearning to rank\\b",
+            "fields": [
+              "title"
+            ],
+            "tier": 2
+          },
+          {
+            "name": "title:retrieval",
+            "pattern": "\\bretrieval\\b",
+            "fields": [
+              "title"
+            ],
+            "tier": 2
+          },
+          {
+            "name": "abstract:recommendation",
+            "pattern": "\\brecommender(s)?\\b|\\bcollaborative filtering\\b|\\b(sequential|session-based|session based|personalized|generative|conversational) recommendations?\\b|\\brecommendation (system|systems|model|models|algorithm|algorithms|task|tasks|framework|frameworks|method|methods|engine|engines|list|lists|quality|accuracy|diversity|performance)\\b",
+            "fields": [
+              "abstract"
+            ],
+            "tier": 1
+          },
+          {
+            "name": "abstract:advertising",
+            "pattern": "\\badvertising\\b|\\badvertisement(s)?\\b|\\badvertiser(s)?\\b|\\bclick[- ]through\\b|\\bsponsored (search|ad|ads|advertisement|advertisements)\\b|\\bonline ads?\\b|\\bad (click|auction|auctions|allocation|ranking|targeting|placement)s?\\b",
+            "fields": [
+              "abstract"
+            ],
+            "tier": 1
+          },
+          {
+            "name": "abstract:search",
+            "pattern": "\\binformation retrieval\\b|\\b(document|dense|sparse|passage|neural|generative|multimodal|visual|semantic|cross-modal|cross modal) retrieval\\b|\\b(web|conversational|sponsored|semantic|neural|personalized|product|e-commerce|ecommerce) search\\b|\\bsearch (engine|engines|ranking|result|results|query|queries|system|systems)\\b|\\bquery (rewriting|understanding|expansion|processing|reformulation)\\b|\\blearning to rank\\b",
+            "fields": [
+              "abstract"
+            ],
+            "tier": 1
+          },
+          {
+            "name": "category:cs.IR",
+            "categories": [
+              "cs.IR"
+            ]
+          },
+          {
+            "name": "technique:retrieval",
+            "pattern": "\\bretrieval\\b|\\breranking\\b|\\branking\\b|\\bbm25\\b|\\bndcg\\b|\\bcollaborative filtering\\b|\\brecommender(s)?\\b|\\blearning to rank\\b|\\bquery (rewriting|understanding|expansion|processing)\\b|\\bdual[- ]encoders?\\b|\\btwo[- ]towers?\\b|\\bnegative sampling\\b|\\bapproximate nearest\\b|\\binverted index\\b",
+            "fields": [
+              "title",
+              "abstract"
+            ]
+          },
+          {
+            "name": "technique:softmax-sampling",
+            "fields": [
+              "title",
+              "abstract"
+            ],
+            "near": {
+              "term": "softmax",
+              "within": 80,
+              "contains": "sampl"
+            }
+          },
+          {
+            "name": "ignored:recommendation",
+            "pattern": "\\brecommendations?\\b",
+            "fields": [
+              "title",
+              "abstract"
+            ],
+            "raw": true,
+            "unless": [
+              "title:recommendation",
+              "abstract:recommendation"
+            ]
+          },
+          {
+            "name": "ignored:search",
+            "pattern": "\\bsearch\\b",
+            "fields": [
+              "title",
+              "abstract"
+            ],
+            "raw": true,
+            "unless": [
+              "title:search",
+              "abstract:search",
+              "title:retrieval"
+            ]
+          },
+          {
+            "name": "ignored:ads",
+            "pattern": "\\bads\\b",
+            "fields": [
+              "title",
+              "abstract"
+            ],
+            "raw": true,
+            "unless": [
+              "title:advertising",
+              "abstract:advertising"
+            ]
+          }
+        ],
+        "decisions": [
+          {
+            "tier": 2,
+            "reason": "title match",
+            "min_signal_tier": 2
+          },
+          {
+            "tier": 2,
+            "reason": "cs.IR with a technique signal",
+            "all_signals": [
+              "category:cs.IR"
+            ],
+            "any_signals": [
+              "technique:retrieval",
+              "technique:softmax-sampling"
+            ]
+          },
+          {
+            "tier": 1,
+            "reason": "abstract phrase only",
+            "min_signal_tier": 1
+          },
+          {
+            "tier": 0,
+            "reason": "private information retrieval is not search",
+            "any_signals": [
+              "excluded:private-information-retrieval",
+              "excluded:dna-storage"
+            ]
+          },
+          {
+            "tier": 0,
+            "reason": "recommendation appears only as an ordinary word",
+            "any_signals": [
+              "ignored:recommendation"
+            ]
+          },
+          {
+            "tier": 0,
+            "reason": "cs.IR alone is not a topic match",
+            "all_signals": [
+              "category:cs.IR"
+            ]
+          },
+          {
+            "tier": 0,
+            "reason": "search or ads appears only as an ordinary word",
+            "any_signals": [
+              "ignored:search",
+              "ignored:ads"
+            ]
+          }
+        ],
+        "fallback_reason": "no topic signal"
+      }
+    }
   ]
 }

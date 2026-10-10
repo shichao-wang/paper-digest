@@ -20,12 +20,12 @@ import (
 	"github.com/shichao-wang/paper-digest/internal/state"
 )
 
-const evalUsage = "用法: paper-digest eval --date YYYY-MM-DD [--to YYYY-MM-DD] [--input papers.json] [--json]\n      paper-digest eval label --id <arxiv id> --label relevant|not-relevant|clear [--input papers.json]\n      paper-digest eval fixtures"
+const evalUsage = "用法: paper-digest eval --date YYYY-MM-DD [--to YYYY-MM-DD] [--rules candidate.json] [--input papers.json] [--json]\n      paper-digest eval rules [--topic id]\n      paper-digest eval label --id <arxiv id> --label relevant|not-relevant|clear [--input papers.json]\n      paper-digest eval fixtures"
 
-var fetchEvalPapers = func(ctx context.Context, since time.Time) ([]papers.Paper, error) {
+var fetchEvalPapers = func(ctx context.Context, since time.Time, searchQuery string) ([]papers.Paper, error) {
 	fetchCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
-	return papers.FetchSince(fetchCtx, &http.Client{Timeout: 45 * time.Second}, "", since)
+	return papers.FetchSince(fetchCtx, &http.Client{Timeout: 45 * time.Second}, "", since, searchQuery)
 }
 
 func runEval(ctx context.Context, cfg config.Config, args []string) error {
@@ -34,6 +34,9 @@ func runEval(ctx context.Context, cfg config.Config, args []string) error {
 	}
 	if len(args) > 0 && args[0] == "fixtures" {
 		return runEvalFixtures(ctx, cfg, args[1:])
+	}
+	if len(args) > 0 && args[0] == "rules" {
+		return runEvalRules(cfg, args[1:])
 	}
 	return runEvalPreview(ctx, cfg, args)
 }
@@ -44,14 +47,27 @@ func runEvalPreview(ctx context.Context, cfg config.Config, args []string) error
 	date := flags.String("date", "", "")
 	to := flags.String("to", "", "")
 	input := flags.String("input", "", "")
+	rulesPath := flags.String("rules", "", "")
 	asJSON := flags.Bool("json", false, "")
 	topicFlag := flags.String("topic", job.Topic, "")
 	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || *date == "" {
 		return errors.New(evalUsage)
 	}
-	topic, err := selectionTopic(*topicFlag)
+	topic, active, _, err := topicRules(cfg, *topicFlag)
 	if err != nil {
 		return err
+	}
+	var draft *papers.Rules
+	if *rulesPath != "" {
+		spec, err := papers.LoadSelection(*rulesPath)
+		if err != nil {
+			return err
+		}
+		compiled, err := papers.Compile(spec)
+		if err != nil {
+			return err
+		}
+		draft = &compiled
 	}
 	dates, err := eval.Dates(*date, *to)
 	if err != nil {
@@ -69,7 +85,11 @@ func runEvalPreview(ctx context.Context, cfg config.Config, args []string) error
 			return err
 		}
 		since := cutoff.Add(-time.Duration(cfg.Arxiv.LookbackDays) * 24 * time.Hour)
-		fetched, err = fetchEvalPapers(ctx, since)
+		query := active.Query
+		if draft != nil {
+			query = papers.OrQuery(active.Query, draft.Query)
+		}
+		fetched, err = fetchEvalPapers(ctx, since, query)
 		if err != nil {
 			return err
 		}
@@ -83,7 +103,7 @@ func runEvalPreview(ctx context.Context, cfg config.Config, args []string) error
 	if err != nil {
 		return err
 	}
-	report, err := eval.Build(topic, dates, cfg.Arxiv.LookbackDays, fetched, sent, labels)
+	report, err := eval.Build(topic, dates, cfg.Arxiv.LookbackDays, active, draft, fetched, sent, labels)
 	if err != nil {
 		return err
 	}
@@ -106,7 +126,7 @@ func runEvalLabel(ctx context.Context, cfg config.Config, args []string) error {
 	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || strings.TrimSpace(*id) == "" || *label == "" {
 		return errors.New(evalUsage)
 	}
-	topic, err := selectionTopic(*topicFlag)
+	topic, _, _, err := topicRules(cfg, *topicFlag)
 	if err != nil {
 		return err
 	}
@@ -164,7 +184,7 @@ func runEvalFixtures(ctx context.Context, cfg config.Config, args []string) erro
 	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
 		return errors.New(evalUsage)
 	}
-	topic, err := selectionTopic(*topicFlag)
+	topic, _, _, err := topicRules(cfg, *topicFlag)
 	if err != nil {
 		return err
 	}
@@ -191,14 +211,32 @@ func runEvalFixtures(ctx context.Context, cfg config.Config, args []string) erro
 	return encoder.Encode(fixtures)
 }
 
-func selectionTopic(topic string) (string, error) {
+func runEvalRules(cfg config.Config, args []string) error {
+	flags := flag.NewFlagSet("eval rules", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	topicFlag := flags.String("topic", job.Topic, "")
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 {
+		return errors.New(evalUsage)
+	}
+	_, _, spec, err := topicRules(cfg, *topicFlag)
+	if err != nil {
+		return err
+	}
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(spec)
+}
+
+func topicRules(cfg config.Config, topic string) (string, papers.Rules, papers.Selection, error) {
 	if strings.TrimSpace(topic) == "" {
 		topic = job.Topic
 	}
-	if topic != job.Topic {
-		return "", errors.New("筛选评估只适用于 recommendation-advertising-search")
+	rules, spec, ok := cfg.TopicSelection(topic)
+	if !ok {
+		return "", papers.Rules{}, papers.Selection{}, fmt.Errorf("主题 %s 没有筛选规则", topic)
 	}
-	return topic, nil
+	return topic, rules, spec, nil
 }
 
 func openEvalStore(cfg config.Config) (*state.Store, error) {

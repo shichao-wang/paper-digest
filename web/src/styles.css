@@ -164,6 +164,9 @@ h1, h2, h3, p { margin-top: 0; }
 .settings-notes p { font-size: 12px; color: var(--muted); line-height: 1.9; margin-bottom: 6px; }
 .settings-notes p:last-child { margin-bottom: 0; }
 .mobile-back { display: none; }
+.rules-editor { display: grid; gap: 8px; margin-bottom: 18px; }
+.rules-editor textarea { width: 100%; min-height: 220px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.5; }
+.rules-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .eval-note { font-size: 13px; color: var(--muted); line-height: 1.7; margin: 0 0 18px; }
 .eval-form { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end; margin-bottom: 22px; }
 .eval-form > a { font-size: 13px; padding-bottom: 8px; }

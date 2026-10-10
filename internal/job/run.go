@@ -21,6 +21,7 @@ type Runner struct {
 	Sender       delivery.Sender
 	LookbackDays int
 	Now          func() time.Time
+	Rules        papers.Rules
 }
 
 func BeijingDate(now time.Time) string {
@@ -57,7 +58,7 @@ func (r *Runner) Generate(ctx context.Context, date string) error {
 			}
 			return yes
 		}
-		selected := papers.Select(all, r.Now(), r.LookbackDays, 5, seen)
+		selected := papers.Select(all, r.Now(), r.LookbackDays, r.Rules, seen)
 		if seenErr != nil {
 			return seenErr
 		}

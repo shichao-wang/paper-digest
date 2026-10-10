@@ -50,7 +50,7 @@ func TestEvalPreviewAndLabelsDoNotMutateTheDigest(t *testing.T) {
 	handler, err := New(store, fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("fixture")}}, Options{
 		Topics:       []config.Topic{{ID: job.Topic}, {ID: "another"}},
 		LookbackDays: 0,
-		Fetch: func(_ context.Context, since time.Time) ([]papers.Paper, error) {
+		Fetch: func(_ context.Context, since time.Time, _ string) ([]papers.Paper, error) {
 			calls++
 			gotSince = since
 			return []papers.Paper{weak, strong, {ID: "arxiv:plain", Title: "Unrelated physics", Published: cutoff.Add(-30 * time.Minute)}}, nil
@@ -140,8 +140,7 @@ func TestEvalPreviewAndLabelsDoNotMutateTheDigest(t *testing.T) {
 	for _, tc := range []struct {
 		method, path, allow string
 	}{
-		{http.MethodPost, "/api/eval", "GET"},
-		{http.MethodPut, "/api/eval", "GET"},
+		{http.MethodPut, "/api/eval", "GET, POST"},
 		{http.MethodGet, "/api/eval/labels", "PUT"},
 		{http.MethodPost, "/api/eval/fixtures", "GET"},
 	} {
@@ -150,6 +149,85 @@ func TestEvalPreviewAndLabelsDoNotMutateTheDigest(t *testing.T) {
 			t.Fatalf("%s %s = %d allow %s", tc.method, tc.path, w.Code, w.Header().Get("Allow"))
 		}
 	}
+}
+
+func TestEvalDraftDoesNotChangeLiveRulesOrDigest(t *testing.T) {
+	store, err := state.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	ctx := context.Background()
+	cutoff, err := eval.Cutoff("2026-10-09")
+	if err != nil {
+		t.Fatal(err)
+	}
+	strong := papers.Paper{ID: "arxiv:strong", Title: "Sequential Recommendation", Published: cutoff.Add(-48 * time.Hour), Categories: []string{"cs.IR"}}
+	if _, err := store.ClaimDay(ctx, job.Topic, "2026-10-09"); err != nil {
+		t.Fatal(err)
+	}
+	queries := []string{}
+	handler, err := New(store, fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("fixture")}}, Options{
+		Topics:       []config.Topic{{ID: job.Topic}},
+		LookbackDays: 7,
+		Fetch: func(_ context.Context, _ time.Time, query string) ([]papers.Paper, error) {
+			queries = append(queries, query)
+			return []papers.Paper{strong}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := request(handler, http.MethodGet, "/api/eval/rules", "")
+	if current.Code != http.StatusOK || !strings.Contains(current.Body.String(), `"max_papers":5`) || strings.Contains(current.Body.String(), "zzzz-no-match") {
+		t.Fatalf("rules = %d %s", current.Code, current.Body.String())
+	}
+	secret := "super-secret-pattern"
+	bad := `{"date":"2026-10-09","rules":{"max_papers":5,"min_tier":1,"query":{"categories":["cs.IR"]},"signals":[{"name":"title:hit","pattern":"(` + secret + `","fields":["title"],"tier":2}],"decisions":[{"tier":2,"reason":"title match","min_signal_tier":2}],"fallback_reason":"no topic signal"}}`
+	rejected := postEval(handler, "127.0.0.1:8081", "http://127.0.0.1:8081", bad)
+	if rejected.Code != http.StatusBadRequest || !strings.Contains(rejected.Body.String(), "正则") || strings.Contains(rejected.Body.String(), secret) || len(queries) != 0 {
+		t.Fatalf("bad rules = %d %s queries=%d", rejected.Code, rejected.Body.String(), len(queries))
+	}
+	cross := postEval(handler, "attacker.invalid", "http://attacker.invalid", `{"date":"2026-10-09","rules":{}}`)
+	if cross.Code != http.StatusForbidden || len(queries) != 0 {
+		t.Fatalf("cross-origin draft = %d %s", cross.Code, cross.Body.String())
+	}
+	draft := `{"date":"2026-10-09","rules":{"max_papers":5,"min_tier":1,"query":{"categories":["cs.LG"]},"signals":[{"name":"title:hit","pattern":"\\bzzzz-no-match\\b","fields":["title"],"tier":2}],"decisions":[{"tier":2,"reason":"title match","min_signal_tier":2}],"fallback_reason":"no topic signal"}}`
+	okDraft := postEval(handler, "127.0.0.1:8081", "http://127.0.0.1:8081", draft)
+	if okDraft.Code != http.StatusOK || len(queries) != 1 || !strings.Contains(queries[0], "cat:cs.IR") || !strings.Contains(queries[0], "cat:cs.LG") {
+		t.Fatalf("draft = %d query=%v body=%s", okDraft.Code, queries, okDraft.Body.String())
+	}
+	var report eval.Report
+	if err := json.Unmarshal(okDraft.Body.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	day := report.Days[0]
+	if day.Draft == nil || len(day.Selected) != 1 || len(day.Draft.Selected) != 0 || len(day.Draft.OnlyActive) != 1 || day.Draft.OnlyActive[0] != strong.ID || day.Candidates[0].DraftReason == "" {
+		t.Fatalf("comparison = selected %d draft %+v", len(day.Selected), day.Draft)
+	}
+	again := request(handler, http.MethodGet, "/api/eval/rules", "")
+	if again.Body.String() != current.Body.String() {
+		t.Fatal("draft changed the active rules")
+	}
+	if _, err := store.GetJob(ctx, job.Topic, "2026-10-10"); !errors.Is(err, state.ErrJobNotFound) {
+		t.Fatalf("draft created a job: %v", err)
+	}
+	seen, err := store.Seen(ctx, job.Topic, strong.ID)
+	if err != nil || seen {
+		t.Fatalf("draft marked seen: %v %v", seen, err)
+	}
+}
+
+func postEval(handler http.Handler, host, origin, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, "/api/eval", strings.NewReader(body))
+	req.Host = host
+	req.Header.Set("Content-Type", "application/json")
+	if origin != "" {
+		req.Header.Set("Origin", origin)
+	}
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	return w
 }
 
 func putLabel(handler http.Handler, host, origin, body string) *httptest.ResponseRecorder {

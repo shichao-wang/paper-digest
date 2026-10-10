@@ -191,17 +191,44 @@ func defaultWorker(cfg config.Config, store *state.Store) (worker, error) {
 	if model == "" {
 		model = "claude-opus-5"
 	}
+	rules, _, ok := cfg.TopicSelection(job.Topic)
+	if !ok {
+		return nil, errors.New("主题 recommendation-advertising-search 没有筛选规则")
+	}
 	return &job.Runner{
 		Store: store,
 		Fetch: func(ctx context.Context) ([]papers.Paper, error) {
 			since := time.Now().Add(-time.Duration(cfg.Arxiv.LookbackDays) * 24 * time.Hour)
 			fetchCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 			defer cancel()
-			return papers.FetchSince(fetchCtx, &http.Client{Timeout: 45 * time.Second}, "", since)
+			return papers.FetchSince(fetchCtx, &http.Client{Timeout: 45 * time.Second}, "", since, rules.Query)
 		},
 		Analyzer: digest.ClaudeAnalyzer{Model: model, APIKey: cfg.Anthropic.APIKey, BaseURL: cfg.Anthropic.BaseURL},
 		Sender:   delivery.StoredFeishu{Store: store, Topic: job.Topic}, LookbackDays: cfg.Arxiv.LookbackDays, Now: time.Now,
+		Rules: rules,
 	}, nil
+}
+
+func selectionRules(cfg config.Config) map[string]papers.Rules {
+	out := map[string]papers.Rules{}
+	for _, topic := range cfg.Topics {
+		rules, _, ok := cfg.TopicSelection(topic.ID)
+		if ok {
+			out[topic.ID] = rules
+		}
+	}
+	return out
+}
+
+func selectionSpecs(cfg config.Config) map[string]papers.Selection {
+	out := map[string]papers.Selection{}
+	for _, topic := range cfg.Topics {
+		_, spec, ok := cfg.TopicSelection(topic.ID)
+		if ok {
+			out[topic.ID] = spec
+		}
+	}
+	return out
 }
 
 func openStore(ctx context.Context, cfg config.Config) (*state.Store, error) {
@@ -242,8 +269,10 @@ func serve(parent context.Context, cfg config.Config, options serveOptions, deps
 		DeliveryEnabled: cfg.Delivery.Enabled,
 		Topics:          cfg.Topics,
 		LookbackDays:    cfg.Arxiv.LookbackDays,
-		Fetch: func(ctx context.Context, since time.Time) ([]papers.Paper, error) {
-			return papers.FetchSince(ctx, &http.Client{Timeout: 45 * time.Second}, "", since)
+		Rules:           selectionRules(cfg),
+		Selections:      selectionSpecs(cfg),
+		Fetch: func(ctx context.Context, since time.Time, searchQuery string) ([]papers.Paper, error) {
+			return papers.FetchSince(ctx, &http.Client{Timeout: 45 * time.Second}, "", since, searchQuery)
 		},
 	})
 	if err != nil {

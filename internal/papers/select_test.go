@@ -93,7 +93,7 @@ func TestOctober9ExclusionReasons(t *testing.T) {
 		if fixture.Set != "2026-10-09" {
 			continue
 		}
-		got := Explain(fixture.paper())
+		got := Explain(fixture.paper(), DefaultRules())
 		if got.Reason != want[fixture.ID] || got.Signals == nil {
 			t.Fatalf("%s reason=%q signals=%v", fixture.ID, got.Reason, got.Signals)
 		}
@@ -141,7 +141,7 @@ func TestOctober9WeakDayDoesNotPad(t *testing.T) {
 		t.Fatalf("newest weak-day paper = %s, want the on-topic softmax paper", byDate[0].ID)
 	}
 
-	got := Select(day, now, 7, 5, nil)
+	got := Select(day, now, 7, DefaultRules(), nil)
 	if len(got) != 1 || got[0].ID != "arxiv:2610.10483" {
 		ids := make([]string, len(got))
 		for i, paper := range got {
@@ -191,7 +191,7 @@ func TestNewerOffTopicPapersDoNotCrowdOutOlderMatches(t *testing.T) {
 		return positive[i].Published.After(positive[j].Published)
 	})
 	want := positive[:maxDailyPapers]
-	got := Select(all, now, 7, 5, nil)
+	got := Select(all, now, 7, DefaultRules(), nil)
 	if len(got) != len(want) {
 		t.Fatalf("Select() returned %d papers, want %d", len(got), len(want))
 	}
@@ -214,7 +214,7 @@ func TestSelectDropsIncidentalWordsAndRanksRelevance(t *testing.T) {
 		{ID: "suggestion", Published: now.Add(-2 * time.Minute), Title: "A methods note", Abstract: "We offer different recommendations on the experimental setup and recommend further search."},
 		{ID: "category-only", Published: now.Add(-3 * time.Minute), Title: "Bridging online communities", Abstract: "A dual-pane social interface for civic discourse.", Categories: []string{"cs.HC", "cs.IR"}},
 		{ID: "abstract-recsys", Published: now.Add(-3 * time.Hour), Title: "Calibrated pruning", Abstract: "The method is an application to sequential recommendation on session logs."},
-	}, now, 7, 5, nil)
+	}, now, 7, DefaultRules(), nil)
 	want := []string{"old-title", "new-abstract", "abstract-recsys"}
 	if len(got) != len(want) {
 		t.Fatalf("Select() returned %d papers, want %d: %#v", len(got), len(want), got)
