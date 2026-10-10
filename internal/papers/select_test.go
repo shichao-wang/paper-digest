@@ -24,7 +24,7 @@ func (f rasFixture) paper() Paper {
 		Title:      f.Title,
 		Abstract:   f.Abstract,
 		Published:  f.Published,
-		categories: f.Categories,
+		Categories: f.Categories,
 	}
 }
 
@@ -75,9 +75,52 @@ func TestDNAStoragePIRStaysOutEvenWithCSIR(t *testing.T) {
 		t.Fatal("missing DNA-storage PIR fixture")
 	}
 	paper := dna.paper()
-	paper.categories = append(append([]string(nil), paper.categories...), "cs.IR")
+	paper.Categories = append(append([]string(nil), paper.Categories...), "cs.IR")
 	if tier := topicTier(paper); tier != tierOut {
 		t.Fatalf("cs.IR DNA-storage PIR tier = %d, want rejected", tier)
+	}
+}
+
+func TestOctober9ExclusionReasons(t *testing.T) {
+	want := map[string]string{
+		"arxiv:2610.10483": "cs.IR with a technique signal",
+		"arxiv:2610.10441": "cs.IR alone is not a topic match",
+		"arxiv:2610.10256": "recommendation appears only as an ordinary word",
+		"arxiv:2610.10224": "recommendation appears only as an ordinary word",
+		"arxiv:2610.10211": "private information retrieval is not search",
+	}
+	for _, fixture := range loadRASFixtures(t) {
+		if fixture.Set != "2026-10-09" {
+			continue
+		}
+		got := Explain(fixture.paper())
+		if got.Reason != want[fixture.ID] || got.Signals == nil {
+			t.Fatalf("%s reason=%q signals=%v", fixture.ID, got.Reason, got.Signals)
+		}
+	}
+}
+
+func TestLooseBaselineKeepsOctober9WeakDay(t *testing.T) {
+	now := time.Date(2026, 10, 9, 8, 0, 0, 0, time.UTC)
+	var day []Paper
+	for _, fixture := range loadRASFixtures(t) {
+		if fixture.Set == "2026-10-09" {
+			day = append(day, fixture.paper())
+		}
+	}
+	got := SelectLoose(day, now, 7, 5, nil)
+	want := []string{"arxiv:2610.10483", "arxiv:2610.10441", "arxiv:2610.10256", "arxiv:2610.10224", "arxiv:2610.10211"}
+	if len(got) != len(want) {
+		t.Fatalf("SelectLoose() = %d papers, want %d", len(got), len(want))
+	}
+	for i, id := range want {
+		if got[i].ID != id {
+			t.Fatalf("loose position %d = %s, want %s", i, got[i].ID, id)
+		}
+	}
+	skipped := SelectLoose(day, now, 7, 5, func(id string) bool { return id == "arxiv:2610.10483" })
+	if len(skipped) != 4 || skipped[0].ID != "arxiv:2610.10441" {
+		t.Fatalf("seen paper was not dropped: %+v", skipped)
 	}
 }
 
@@ -167,9 +210,9 @@ func TestSelectDropsIncidentalWordsAndRanksRelevance(t *testing.T) {
 	got := Select([]Paper{
 		{ID: "new-abstract", Published: now.Add(-time.Hour), Title: "Notes on libraries", Abstract: "We evaluate a document retrieval model on two corpora."},
 		{ID: "old-title", Published: now.Add(-48 * time.Hour), Title: "Web Search Ranking for Product Queries"},
-		{ID: "pulsar", Published: now.Add(-time.Minute), Title: "A Coherent Harmonic Summing Pulsar Search Code", Abstract: "We search the parameter space. The ads in the appendix list file sizes.", categories: []string{"astro-ph.IM"}},
+		{ID: "pulsar", Published: now.Add(-time.Minute), Title: "A Coherent Harmonic Summing Pulsar Search Code", Abstract: "We search the parameter space. The ads in the appendix list file sizes.", Categories: []string{"astro-ph.IM"}},
 		{ID: "suggestion", Published: now.Add(-2 * time.Minute), Title: "A methods note", Abstract: "We offer different recommendations on the experimental setup and recommend further search."},
-		{ID: "category-only", Published: now.Add(-3 * time.Minute), Title: "Bridging online communities", Abstract: "A dual-pane social interface for civic discourse.", categories: []string{"cs.HC", "cs.IR"}},
+		{ID: "category-only", Published: now.Add(-3 * time.Minute), Title: "Bridging online communities", Abstract: "A dual-pane social interface for civic discourse.", Categories: []string{"cs.HC", "cs.IR"}},
 		{ID: "abstract-recsys", Published: now.Add(-3 * time.Hour), Title: "Calibrated pruning", Abstract: "The method is an application to sequential recommendation on session logs."},
 	}, now, 7, 5, nil)
 	want := []string{"old-title", "new-abstract", "abstract-recsys"}

@@ -17,7 +17,7 @@
 | `topics[].id` | `recommendation-advertising-search` | 至少一个，唯一，以小写字母开头，后续用小写字母、数字和分隔用连字符 |
 | `topics[].webhook_url` | 新配置省略 | 仅用于旧配置迁移；新地址通过页面保存到 SQLite |
 
-使用 [Compose 示例](../config/config.example.json) 或 [宿主机示例](../config/config.local.example.json)；对应的实际配置 `config/config.json`、`config/config.local.json` 均被 Git 和 Docker 构建忽略。配置没有热加载，Webhook 通过数据库动态读取。直接运行 CLI 默认读取工作目录下的 `config/config.json`，其他路径在子命令前指定 `--config <文件>`；`health` 和 `preview` 不读取配置。
+使用 [Compose 示例](../config/config.example.json) 或 [宿主机示例](../config/config.local.example.json)；对应的实际配置 `config/config.json`、`config/config.local.json` 均被 Git 和 Docker 构建忽略。配置没有热加载，Webhook 通过数据库动态读取。直接运行 CLI 默认读取工作目录下的 `config/config.json`，其他路径在子命令前指定 `--config <文件>`；`health` 和 `preview` 不读取配置。`eval` 读取数据库路径和 `arxiv.lookback_days`，不新增配置字段。
 
 ## 配置加载
 

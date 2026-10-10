@@ -37,6 +37,18 @@ make preview # 仅渲染离线 fixture，不访问外部服务
 
 完整的宿主机配置、前后端双终端开发与演示步骤见 [开发指南](docs/development.md)。这些命令不会发送群消息或调用模型。
 
+## 改筛选规则前的人工评估
+
+筛选逻辑变更合并前，先预览某一天或一段日期会入选哪些论文，对照宽松旧规则和当天实际保存的日报，再记下相关或不相关。预览不生成摘要、不发送飞书、不把论文标为已读，也不写入日报任务。
+
+1. 修改 `internal/papers` 里的筛选规则。
+2. 跑预览。页面打开 http://127.0.0.1:8081 ，侧栏进入「筛选评估」，选择日期后点「运行预览」。或在容器里执行 `docker exec paper-digest-paper-digest-1 /usr/local/bin/paper-digest eval --date 2026-10-09`。日期段加上 `--to`。`--input papers.json` 用本地候选，不访问 arXiv。`--json` 输出完整结果。
+3. 标注。页面对每篇点「相关」或「不相关」。命令行可以执行 `paper-digest eval label --id arxiv:2610.10483 --label relevant --input papers.json`；省略 `--input` 时只更新判断，并保留已有论文快照。判断保存在 SQLite 的 `selection_labels`，打开数据库时自动建表。
+4. 对照。预览列出当前入选顺序、仅当前规则、仅宽松基线、仅当日已保存，以及已标注入选论文的精确率。
+5. 需要回归样本时执行 `paper-digest eval fixtures`，或打开 `/api/eval/fixtures`。导出的 JSON 用 `positive` / `negative` 区分，可放进选题测试。核对后再合并。
+
+`preview <fixture.json>` 仍只离线渲染 Markdown，不负责选题。
+
 ## 文档导航
 
 | 目的 | 文档 |

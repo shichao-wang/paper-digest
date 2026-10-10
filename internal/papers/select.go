@@ -34,6 +34,9 @@ var (
 	titleRetrieval         = regexp.MustCompile(`\bretrieval\b`)
 	irTechnique            = regexp.MustCompile(`\bretrieval\b|\breranking\b|\branking\b|\bbm25\b|\bndcg\b|\bcollaborative filtering\b|\brecommender(s)?\b|\blearning to rank\b|\bquery (rewriting|understanding|expansion|processing)\b|\bdual[- ]encoders?\b|\btwo[- ]towers?\b|\bnegative sampling\b|\bapproximate nearest\b|\binverted index\b`)
 	pirTerm                = regexp.MustCompile(`\bpir\b`)
+	bareRecommendation     = regexp.MustCompile(`\brecommendations?\b`)
+	bareSearch             = regexp.MustCompile(`\bsearch\b`)
+	bareAds                = regexp.MustCompile(`\bads\b`)
 )
 
 func Select(all []Paper, now time.Time, lookbackDays, max int, seen func(string) bool) []Paper {
@@ -89,19 +92,102 @@ func Select(all []Paper, now time.Time, lookbackDays, max int, seen func(string)
 	return candidates
 }
 
-func topicTier(paper Paper) int {
+// Explanation is the topic decision for one paper: tier, the signals that fired,
+// and a short reason. Tier 0 is not selected.
+type Explanation struct {
+	Tier    int      `json:"tier"`
+	Signals []string `json:"signals"`
+	Reason  string   `json:"reason"`
+}
+
+func Explain(paper Paper) Explanation {
 	rawTitle := strings.ToLower(paper.Title)
 	rawAbstract := strings.ToLower(paper.Abstract)
 	context := rawTitle + " " + rawAbstract
+	var signals []string
+	if strings.Contains(context, "private information retrieval") {
+		signals = append(signals, "excluded:private-information-retrieval")
+	}
+	if strings.Contains(context, "dna") && (strings.Contains(context, "data storage") || pirTerm.MatchString(context)) {
+		signals = append(signals, "excluded:dna-storage")
+	}
 	title := maskOffTopicRetrieval(rawTitle, context)
 	abstract := maskOffTopicRetrieval(rawAbstract, context)
-	if titleSignal(title) || (hasCategory(paper, "cs.IR") && techniqueSignal(title+" "+abstract)) {
-		return tierStrong
+	if titleRecommendation.MatchString(title) {
+		signals = append(signals, "title:recommendation")
 	}
-	if abstractSignal(abstract) {
-		return tierAbstract
+	if advertisingSignal.MatchString(title) {
+		signals = append(signals, "title:advertising")
 	}
-	return tierOut
+	if searchSignal.MatchString(title) {
+		signals = append(signals, "title:search")
+	}
+	if titleRetrieval.MatchString(title) {
+		signals = append(signals, "title:retrieval")
+	}
+	if abstractRecommendation.MatchString(abstract) {
+		signals = append(signals, "abstract:recommendation")
+	}
+	if advertisingSignal.MatchString(abstract) {
+		signals = append(signals, "abstract:advertising")
+	}
+	if searchSignal.MatchString(abstract) {
+		signals = append(signals, "abstract:search")
+	}
+	if hasCategory(paper, "cs.IR") {
+		signals = append(signals, "category:cs.IR")
+	}
+	body := title + " " + abstract
+	if irTechnique.MatchString(body) {
+		signals = append(signals, "technique:retrieval")
+	}
+	if softmaxSampling(body) {
+		signals = append(signals, "technique:softmax-sampling")
+	}
+	if bareRecommendation.MatchString(context) && !titleRecommendation.MatchString(title) && !abstractRecommendation.MatchString(abstract) {
+		signals = append(signals, "ignored:recommendation")
+	}
+	if bareSearch.MatchString(context) && !searchSignal.MatchString(title) && !searchSignal.MatchString(abstract) && !titleRetrieval.MatchString(title) {
+		signals = append(signals, "ignored:search")
+	}
+	if bareAds.MatchString(context) && !advertisingSignal.MatchString(title) && !advertisingSignal.MatchString(abstract) {
+		signals = append(signals, "ignored:ads")
+	}
+	if signals == nil {
+		signals = []string{}
+	}
+
+	switch {
+	case titleSignal(title):
+		return Explanation{Tier: tierStrong, Signals: signals, Reason: "title match"}
+	case hasCategory(paper, "cs.IR") && techniqueSignal(body):
+		return Explanation{Tier: tierStrong, Signals: signals, Reason: "cs.IR with a technique signal"}
+	case abstractSignal(abstract):
+		return Explanation{Tier: tierAbstract, Signals: signals, Reason: "abstract phrase only"}
+	case signal(signals, "excluded:private-information-retrieval") || signal(signals, "excluded:dna-storage"):
+		return Explanation{Tier: tierOut, Signals: signals, Reason: "private information retrieval is not search"}
+	case signal(signals, "ignored:recommendation"):
+		return Explanation{Tier: tierOut, Signals: signals, Reason: "recommendation appears only as an ordinary word"}
+	case hasCategory(paper, "cs.IR"):
+		return Explanation{Tier: tierOut, Signals: signals, Reason: "cs.IR alone is not a topic match"}
+	case signal(signals, "ignored:search") || signal(signals, "ignored:ads"):
+		return Explanation{Tier: tierOut, Signals: signals, Reason: "search or ads appears only as an ordinary word"}
+	default:
+		return Explanation{Tier: tierOut, Signals: signals, Reason: "no topic signal"}
+	}
+}
+
+func signal(signals []string, want string) bool {
+	for _, item := range signals {
+		if item == want {
+			return true
+		}
+	}
+	return false
+}
+
+func topicTier(paper Paper) int {
+	return Explain(paper).Tier
 }
 
 func maskOffTopicRetrieval(text, context string) string {
@@ -151,7 +237,7 @@ func softmaxSampling(text string) bool {
 }
 
 func hasCategory(paper Paper, category string) bool {
-	for _, candidate := range paper.categories {
+	for _, candidate := range paper.Categories {
 		if strings.EqualFold(candidate, category) {
 			return true
 		}

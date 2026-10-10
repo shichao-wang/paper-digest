@@ -84,8 +84,8 @@ func TestFetchParsesAtomFeedAndQuery(t *testing.T) {
 	if first.URL != "https://arxiv.org/abs/2401.01234v2" {
 		t.Errorf("URL = %q", first.URL)
 	}
-	if len(first.categories) != 2 || first.categories[0] != "cs.IR" {
-		t.Errorf("categories = %#v", first.categories)
+	if len(first.Categories) != 2 || first.Categories[0] != "cs.IR" {
+		t.Errorf("categories = %#v", first.Categories)
 	}
 	if got[1].Version != "" || got[1].URL != "https://arxiv.org/abs/2401.01235" {
 		t.Errorf("unversioned paper = %#v", got[1])
@@ -240,7 +240,7 @@ func TestFetchSinceStopsOnShortPageAndCancel(t *testing.T) {
 func TestSelectFiltersAndCapsResults(t *testing.T) {
 	now := time.Date(2026, time.September, 27, 12, 0, 0, 0, time.UTC)
 	papers := []Paper{
-		{ID: "recent-a", Published: now.Add(-time.Hour), Title: "Collaborative recommendation for web search", categories: []string{"cs.IR"}},
+		{ID: "recent-a", Published: now.Add(-time.Hour), Title: "Collaborative recommendation for web search", Categories: []string{"cs.IR"}},
 		{ID: "recent-b", Published: now.Add(-2 * time.Hour), Title: "Sponsored search advertising auctions"},
 		{ID: "recent-c", Published: now.Add(-3 * time.Hour), Title: "Personalized recommendation in information retrieval"},
 		{ID: "recent-d", Published: now.Add(-4 * time.Hour), Title: "Online advertising recommendation systems"},
@@ -250,7 +250,7 @@ func TestSelectFiltersAndCapsResults(t *testing.T) {
 		{ID: "old", Published: now.Add(-8 * 24 * time.Hour), Title: "Recommendation for web search"},
 		{ID: "future", Published: now.Add(time.Minute), Title: "Recommendation for web search"},
 		{ID: "already-seen", Published: now, Title: "Recommendation for search advertising"},
-		{ID: "recent-a", Published: now.Add(-30 * time.Minute), Title: "Collaborative recommendation for web search", categories: []string{"cs.IR"}},
+		{ID: "recent-a", Published: now.Add(-30 * time.Minute), Title: "Collaborative recommendation for web search", Categories: []string{"cs.IR"}},
 	}
 	seenCalls := make(map[string]int)
 	seen := func(id string) bool {
@@ -281,7 +281,7 @@ func TestSelectFiltersAndCapsResults(t *testing.T) {
 func TestSelectUsesUnionOfRASTopics(t *testing.T) {
 	now := time.Now().UTC()
 	got := Select([]Paper{
-		{ID: "category-search", Published: now, Title: "Information retrieval", categories: []string{"cs.IR"}},
+		{ID: "category-search", Published: now, Title: "Information retrieval", Categories: []string{"cs.IR"}},
 		{ID: "keyword-cross", Published: now, Title: "Ad ranking for sponsored search recommendation"},
 		{ID: "recommendation-only", Published: now, Title: "Collaborative filtering for personalized recommendation"},
 		{ID: "advertising-only", Published: now, Title: "Online advertising auction design"},

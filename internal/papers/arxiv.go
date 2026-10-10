@@ -38,7 +38,7 @@ type Paper struct {
 	Abstract  string
 	URL       string
 
-	categories []string
+	Categories []string `json:"categories,omitempty"`
 }
 
 type atomFeed struct {
@@ -199,7 +199,7 @@ func parseEntry(entry atomEntry) (Paper, error) {
 		Updated:    updated,
 		Abstract:   normalizeSpace(entry.Summary),
 		URL:        "https://arxiv.org/abs/" + strings.TrimPrefix(id, "arxiv:") + versionSuffix,
-		categories: categories,
+		Categories: categories,
 	}, nil
 }
 

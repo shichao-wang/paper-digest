@@ -3,6 +3,7 @@ import { useLocation, useRequest } from './hooks'
 import type { Digest, DigestDetail, Page, Paper, Topic } from './types'
 import WebhookSettings from './WebhookSettings'
 import TopicManagement from './TopicManagement'
+import EvalReview from './EvalReview'
 
 const statusLabels: Record<string, string> = {
   new: '待生成', processing: '生成中', ready: '已生成', sending: '发送中',
@@ -45,6 +46,7 @@ export default function App() {
   const historyView = params.get('view') === 'digests'
   const settingsView = params.get('view') === 'settings'
   const managementView = params.get('view') === 'topics'
+  const evalView = params.get('view') === 'eval'
   const adminView = settingsView || managementView
   const [navigationOpen, setNavigationOpen] = useState(false)
   const menuButton = useRef<HTMLButtonElement>(null)
@@ -75,7 +77,7 @@ export default function App() {
   const returnFocus = useRef<HTMLButtonElement | null>(null)
   useEffect(() => { setInput(query) }, [query])
   const listQuery = new URLSearchParams({ topic: topicID, q: query, date, summary, page: String(page), pageSize: '20' })
-  const papers = useRequest<Page<Paper>>(!topic || historyView || adminView ? null : `/api/papers?${listQuery}`)
+  const papers = useRequest<Page<Paper>>(!topic || historyView || adminView || evalView ? null : `/api/papers?${listQuery}`)
   const digestQuery = new URLSearchParams({ topic: topicID, page: String(page), pageSize: '20' })
   const digests = useRequest<Page<Digest>>(topic && historyView ? `/api/digests?${digestQuery}` : null)
   const selectedID = params.get('paper') || ''
@@ -129,6 +131,10 @@ export default function App() {
     if (navigationOpen) closeNavigation()
     navigate({ view: 'topics', page: null, paper: null, paperDate: null, digest: null })
   }
+  function openEval() {
+    if (navigationOpen) closeNavigation()
+    navigate({ view: 'eval', page: null, paper: null, paperDate: null, digest: null })
+  }
   function editTopic(id: string) {
     navigate({ view: 'settings', topic: id, page: null, paper: null, paperDate: null, digest: null })
   }
@@ -142,20 +148,20 @@ export default function App() {
     </header>
     <div className="app-layout">
     <aside id="topic-navigation" className={`sidebar ${navigationOpen ? 'is-open' : ''}`} onKeyDown={event => { if (event.key === 'Escape') closeNavigation() }}>
-      <nav aria-label="主题导航"><h2 className="sidebar-heading">阅读主题</h2><div className="sidebar-topics">{topics.data?.items.map(item => <button className="sidebar-link" key={item.id} aria-current={!adminView && topicID === item.id ? 'page' : undefined} onClick={() => selectTopic(item.id)}><span className="topic-dot" aria-hidden="true" /><span>{item.name}</span></button>)}</div>
+      <nav aria-label="主题导航"><h2 className="sidebar-heading">阅读主题</h2><div className="sidebar-topics">{topics.data?.items.map(item => <button className="sidebar-link" key={item.id} aria-current={!adminView && !evalView && topicID === item.id ? 'page' : undefined} onClick={() => selectTopic(item.id)}><span className="topic-dot" aria-hidden="true" /><span>{item.name}</span></button>)}</div>
       {topics.loading && <p className="sidebar-note" role="status">正在加载主题…</p>}
       {topics.error && <p className="sidebar-note">主题加载失败 <button className="text-button" onClick={topics.retry}>重试</button></p>}
       {topics.data?.items.length === 0 && <p className="sidebar-note">尚未登记主题</p>}
-      <div className="sidebar-management"><button className="sidebar-link" aria-current={adminView ? 'page' : undefined} onClick={manageTopics}><span aria-hidden="true">⚙</span><span>主题管理</span></button></div></nav>
+      <div className="sidebar-management"><button className="sidebar-link" aria-current={evalView ? 'page' : undefined} onClick={openEval}><span aria-hidden="true">✓</span><span>筛选评估</span></button><button className="sidebar-link" aria-current={adminView ? 'page' : undefined} onClick={manageTopics}><span aria-hidden="true">⚙</span><span>主题管理</span></button></div></nav>
     </aside>
     <main id="main-content">
       {settingsView && <button className="back-to-management" onClick={manageTopics}>‹ 返回主题管理</button>}
-      <div className="page-heading"><div>{!adminView && <p className="eyebrow">{historyView ? '日报历史' : '论文库'}</p>}<h2>{managementView ? '主题管理' : settingsView ? '推送配置' : topic?.name || '论文阅读'}</h2><p>{managementView ? '集中查看各主题的推送配置与自动任务状态。' : settingsView ? topic?.name || '选择一个主题以编辑推送配置。' : historyView ? '按日期回看当前主题的精选论文与日报。' : '阅读当前主题的每日精选，按最近入选日期排列。'}</p></div><span className="local-label"><span aria-hidden="true" />{adminView ? '本机配置' : '本机阅读'}</span></div>
+      <div className="page-heading"><div>{!adminView && <p className="eyebrow">{evalView ? '筛选评估' : historyView ? '日报历史' : '论文库'}</p>}<h2>{managementView ? '主题管理' : settingsView ? '推送配置' : topic?.name || '论文阅读'}</h2><p>{managementView ? '集中查看各主题的推送配置与自动任务状态。' : settingsView ? topic?.name || '选择一个主题以编辑推送配置。' : evalView ? '用当前规则预览某一天的入选结果，并记下相关或不相关。' : historyView ? '按日期回看当前主题的精选论文与日报。' : '阅读当前主题的每日精选，按最近入选日期排列。'}</p></div><span className="local-label"><span aria-hidden="true" />{adminView ? '本机配置' : evalView ? '本机评估' : '本机阅读'}</span></div>
       {topics.loading && <Message title="正在加载主题…" />}
       {topics.error && <Message title="无法加载主题" retry={topics.retry}>{topics.error}</Message>}
       {topics.data && managementView && <TopicManagement topics={topics.data.items} onEdit={editTopic} onRead={selectTopic} />}
       {topics.data && !managementView && !topic && <Message title={topics.data.items.length ? '主题不存在' : '尚未配置主题'}>{topics.data.items.length ? '请从主题导航中选择，当前链接不会读写其他主题。' : '请先在运行配置的 topics 中登记主题，再重新启动服务。'}</Message>}
-      {topic && !managementView && (settingsView ? <WebhookSettings key={topic.id} topic={topic} /> : <>
+      {topic && !managementView && (settingsView ? <WebhookSettings key={topic.id} topic={topic} /> : evalView ? <EvalReview topicID={topic.id} joint={topic.id === 'recommendation-advertising-search'} /> : <>
       <nav className="reading-tabs" aria-label="主题内容"><button aria-current={!historyView ? 'page' : undefined} onClick={() => navigate({ view: null, page: null, paper: null, paperDate: null, digest: null })}>论文库</button><button aria-current={historyView ? 'page' : undefined} onClick={() => navigate({ view: 'digests', page: null, paper: null, paperDate: null, digest: null })}>日报历史</button></nav>
       {!historyView && <form className="filters" onSubmit={event => { event.preventDefault(); filter({ q: input.trim() }) }}>
         <label className="search-field"><span className="sr-only">搜索标题、作者或摘要</span><svg width="19" height="19" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" stroke="currentColor" strokeWidth="1.7" /><path d="m16 16 5 5" stroke="currentColor" strokeWidth="1.7" /></svg><input type="search" placeholder="搜索标题、作者或摘要" value={input} onChange={event => setInput(event.target.value)} /><button type="submit">搜索</button></label>

@@ -49,7 +49,7 @@ func run(args []string) error {
 		configPath, args = args[1], args[2:]
 	}
 	if len(args) == 0 {
-		return errors.New("用法: paper-digest [--config <文件>] serve|health|status [日期]|preview <fixture.json>|backup <文件>|send-test --topic <id> --confirm")
+		return errors.New("用法: paper-digest [--config <文件>] serve|health|status [日期]|preview <fixture.json>|eval|backup <文件>|send-test --topic <id> --confirm")
 	}
 	if args[0] == "send-test" {
 		if len(args) != 4 || args[1] != "--topic" || args[2] == "" || args[3] != "--confirm" {
@@ -96,6 +96,13 @@ func run(args []string) error {
 		}
 		fmt.Print(digest.Render(time.Now(), items))
 		return nil
+	}
+	if args[0] == "eval" {
+		cfg, err := config.Load(configPath)
+		if err != nil {
+			return err
+		}
+		return runEval(context.Background(), cfg, args[1:])
 	}
 	if args[0] == "health" {
 		flags := flag.NewFlagSet("health", flag.ContinueOnError)
@@ -231,7 +238,14 @@ func serve(parent context.Context, cfg config.Config, options serveOptions, deps
 	if staticFS == nil {
 		staticFS = os.DirFS(options.WebDir)
 	}
-	handler, err := web.New(store, staticFS, web.Options{DeliveryEnabled: cfg.Delivery.Enabled, Topics: cfg.Topics})
+	handler, err := web.New(store, staticFS, web.Options{
+		DeliveryEnabled: cfg.Delivery.Enabled,
+		Topics:          cfg.Topics,
+		LookbackDays:    cfg.Arxiv.LookbackDays,
+		Fetch: func(ctx context.Context, since time.Time) ([]papers.Paper, error) {
+			return papers.FetchSince(ctx, &http.Client{Timeout: 45 * time.Second}, "", since)
+		},
+	})
 	if err != nil {
 		return err
 	}
@@ -282,7 +296,8 @@ func serve(parent context.Context, cfg config.Config, options serveOptions, deps
 			defer handlers.Done()
 			handler.ServeHTTP(w, r)
 		}),
-		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 15 * time.Second,
+		// 写超时要盖住筛选评估里的 arXiv 抓取；其余接口本身很快。
+		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 4 * time.Minute,
 		IdleTimeout: 60 * time.Second, BaseContext: func(net.Listener) context.Context { return ctx },
 	}
 	httpDone := make(chan error, 1)

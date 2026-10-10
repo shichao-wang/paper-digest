@@ -82,6 +82,9 @@ go run ./cmd/paper-digest --config data/web-preview-2/config.json serve
 | `health [--url <地址>]` | 检查正在运行的 HTTP 与数据库；不读取配置 |
 | `status [YYYY-MM-DD]` | 查询联合主题任务；默认北京时间当天，无任务时失败 |
 | `preview <fixture.json>` | 离线渲染 Markdown 到标准输出；不读配置或数据库 |
+| `eval --date YYYY-MM-DD [--to YYYY-MM-DD] [--input papers.json] [--json]` | 用当前规则预览选题；不调用模型、不发送、不写日报或去重记录 |
+| `eval label --id <id> --label relevant\|not-relevant\|clear [--input papers.json]` | 保存或清除一篇论文的人工判断 |
+| `eval fixtures` | 把已标注且有论文快照的记录导出为回归样本 |
 | `backup <未存在的文件>` | 打开配置中的数据库并生成一致性快照 |
 | `send-test --topic <id> --confirm` | 一条真实测试群消息；先遵循 [运维试发流程](operations.md#受控飞书试发) |
 

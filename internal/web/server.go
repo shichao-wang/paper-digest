@@ -18,12 +18,17 @@ import (
 
 	"github.com/shichao-wang/paper-digest/internal/config"
 	"github.com/shichao-wang/paper-digest/internal/job"
+	"github.com/shichao-wang/paper-digest/internal/papers"
 	"github.com/shichao-wang/paper-digest/internal/state"
 )
 
 type Options struct {
 	DeliveryEnabled bool
 	Topics          []config.Topic
+	LookbackDays    int
+	// Fetch loads arXiv candidates for a selection preview. since is the start
+	// of the lookback window. A nil Fetch uses the public arXiv API.
+	Fetch func(context.Context, time.Time) ([]papers.Paper, error)
 }
 
 type topicRecord struct {
@@ -61,6 +66,15 @@ func New(store *state.Store, staticFS fs.FS, options ...Options) (http.Handler, 
 			s.defaultTopic = topic.ID
 		}
 	}
+	lookback := settings.LookbackDays
+	if lookback == 0 {
+		lookback = 7
+	}
+	if lookback < 1 || lookback > 30 {
+		return nil, fmt.Errorf("web: lookback days must be from 1 to 30")
+	}
+	s.lookbackDays = lookback
+	s.fetch = settings.Fetch
 	return http.HandlerFunc(s.serveHTTP), nil
 }
 
@@ -70,6 +84,8 @@ type server struct {
 	files        http.Handler
 	topics       []topicRecord
 	defaultTopic string
+	lookbackDays int
+	fetch        func(context.Context, time.Time) ([]papers.Paper, error)
 }
 
 func (s *server) selectTopic(w http.ResponseWriter, r *http.Request) (topicRecord, bool) {
@@ -98,6 +114,10 @@ func (s *server) selectTopic(w http.ResponseWriter, r *http.Request) (topicRecor
 func (s *server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	if r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/") {
+		if r.URL.Path == "/api/eval" || r.URL.Path == "/api/eval/labels" || r.URL.Path == "/api/eval/fixtures" {
+			s.evalAPI(w, r)
+			return
+		}
 		allowed := "GET"
 		settings := r.URL.Path == "/api/settings/webhook"
 		if settings {
