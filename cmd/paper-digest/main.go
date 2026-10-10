@@ -187,9 +187,10 @@ func defaultWorker(cfg config.Config, store *state.Store) (worker, error) {
 	return &job.Runner{
 		Store: store,
 		Fetch: func(ctx context.Context) ([]papers.Paper, error) {
-			fetchCtx, cancel := context.WithTimeout(ctx, 40*time.Second)
+			since := time.Now().Add(-time.Duration(cfg.Arxiv.LookbackDays) * 24 * time.Hour)
+			fetchCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 			defer cancel()
-			return papers.Fetch(fetchCtx, &http.Client{Timeout: 40 * time.Second}, "", 100)
+			return papers.FetchSince(fetchCtx, &http.Client{Timeout: 45 * time.Second}, "", since)
 		},
 		Analyzer: digest.ClaudeAnalyzer{Model: model, APIKey: cfg.Anthropic.APIKey, BaseURL: cfg.Anthropic.BaseURL},
 		Sender:   delivery.StoredFeishu{Store: store, Topic: job.Topic}, LookbackDays: cfg.Arxiv.LookbackDays, Now: time.Now,

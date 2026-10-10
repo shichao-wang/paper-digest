@@ -13,7 +13,7 @@
 | `anthropic.api_key` | 空字符串 | 启用 worker 时必须非空；从配置读取 |
 | `anthropic.model` | 示例及代码回退为 `claude-opus-5` | 按所用服务实际支持的模型填写；仓库示例不保证服务端可用性 |
 | `anthropic.base_url` | 空字符串 | 使用 SDK 默认地址；自定义地址要求 HTTP/HTTPS、无 URL 凭据、查询参数或片段 |
-| `arxiv.lookback_days` | `7` | 始终校验为 1～30；按论文首次发布日期筛选 |
+| `arxiv.lookback_days` | `7` | 始终校验为 1～30；按论文首次发布日期筛选，采集会分页覆盖该窗口 |
 | `topics[].id` | `recommendation-advertising-search` | 至少一个，唯一，以小写字母开头，后续用小写字母、数字和分隔用连字符 |
 | `topics[].webhook_url` | 新配置省略 | 仅用于旧配置迁移；新地址通过页面保存到 SQLite |
 

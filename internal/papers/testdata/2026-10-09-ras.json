@@ -1,0 +1,134 @@
+[
+  {
+    "id": "arxiv:2610.10483",
+    "role": "positive",
+    "set": "2026-10-09",
+    "title": "Two-Level Softmax Sampling Done Right: Correcting Bias from Size Imbalance and Dispersion",
+    "abstract": "Sampling from a softmax distribution is a fundamental operation in machine learning, but its linear complexity in the number of items makes exact sampling impractical at scale. Two-level softmax (2LS) sampling is a popular alternative enabling sublinear-time sampling. Assuming items are partitioned into clusters, 2LS first samples a cluster and then an item within it. In this paper, we show that, despite its advantages, 2LS introduces systematic and undesirable sampling biases, which arise from misweighting clusters by ignoring both cluster size imbalance and intra-cluster similarity dispersion. We propose two sampling methods, Size-Corrected 2LS (S-2LS) and Size- and Dispersion-Corrected 2LS (SD-2LS), which correct these biases and provide provably better softmax approximations with negligible to non-existent computational overhead. In-depth experiments on five large-scale datasets validate the improved sampling properties of our methods. We recommend their consistent use in place of standard 2LS in future work.",
+    "published": "2026-10-07T17:38:35Z",
+    "categories": [
+      "cs.LG",
+      "cs.IR",
+      "stat.ML"
+    ]
+  },
+  {
+    "id": "arxiv:2610.10441",
+    "role": "negative",
+    "set": "2026-10-09",
+    "title": "CrossWeave: Bridging Perspectives Across Online Communities with a Dual-Pane Design",
+    "abstract": "Social media systems typically display conversations among already familiar contributors, which can be predictable and one-sided. In civic discourse, this design narrows discussion, reinforces divides, and distorts the perception of public opinion. To encourage cross-community engagement, we present CrossWeave, an AI-powered bridging system that augments the standard social media feed. As the user reads a post, CrossWeave surfaces diverse relevant posts from other threads in a side pane and highlights the connections. Users are invited to venture out of their echo chamber, explore a broader range of views and arguments, and ``click across'' to engage with their authors. When they do, CrossWeave facilitates constructive posting, not only by showcasing relevant past content but also by simulating possible reactions as the user drafts a post.",
+    "published": "2026-10-07T17:15:53Z",
+    "categories": [
+      "cs.SI",
+      "cs.HC",
+      "cs.IR"
+    ]
+  },
+  {
+    "id": "arxiv:2610.10256",
+    "role": "negative",
+    "set": "2026-10-09",
+    "title": "OOM-RL II: Reality Is an Oracle, Not a Debugger Provenance-Constrained Diagnosis in Continually Evolving Agent-Engineered Systems",
+    "abstract": "Reality may establish that an outcome occurred without identifying which evolving procedure produced it or why. This distinction matters in production ML systems whose code, configuration, and artifacts change while external feedback accumulates. We examine it in a human-directed, agent-engineered quantitative trading system, using oracle to mean an external source of realized outcomes rather than a complete correctness specification. Across one year, the account gained and outperformed a broad market index, while annual alpha was not statistically distinguishable from zero under the main retrospective specification. Retrospectively selected subperiods include adverse relative performance and conditional candidate-level weakness under declared approximate references. Engineering records document changes during the episode, and complete recommendation-to-runtime binding is unavailable. The archive does not establish a common frozen instance or a unique cause. The case motivates an outcome--diagnosis gap: outcome evidence, evaluated-object identity, and causal explanation support distinct claims. We distinguish frozen instances, pre-specified adaptive procedures, and ad-hoc development; organize archive-relative claim identifiability and an evidence hierarchy; and propose a prospective production-binding protocol. An illustrative compatible-history example shows how factual binding can resolve a recommendation's referent without supplying its counterfactual effect. The protocol is proposed rather than prospectively validated. External feedback constrains outcome claims, while provenance and additional identification structure determine the resolution of diagnosis.",
+    "published": "2026-10-07T15:33:17Z",
+    "categories": [
+      "cs.AI",
+      "cs.SE",
+      "q-fin.PM"
+    ]
+  },
+  {
+    "id": "arxiv:2610.10224",
+    "role": "negative",
+    "set": "2026-10-09",
+    "title": "Generative AI in Publishing: An Editors' Panel on Ethics and Policies",
+    "abstract": "Generative artificial intelligence (GenAI) is reshaping scholarly research faster than journals have developed stable norms for its use. This article presents an edited thematic account of a 2026 Joint Statistical Meetings panel that brought together editorial perspectives from mathematical statistics, data science, biomedical statistics, and general statistical scholarship. The discussion examines journal policies, disclosure, authorship and research integrity, peer-review confidentiality, researcher training, editorial workload, access, and possible future models of scholarly publishing. Panelists shared commitments to human accountability, the protection of confidential submissions, and disclosure of consequential assistance, while offering different recommendations on assistance with research ideas and proofs, disclosure requirements, automated review, and policy enforcement. By distinguishing shared principles from unresolved implementation questions, the article clarifies the choices facing statistical publishing and outlines an agenda for evaluating policies and practices as GenAI evolves. The account seeks to foster continued discussion of GenAI in scientific communication and encourage statistical organizations to develop more robust operational standards.",
+    "published": "2026-10-07T15:16:34Z",
+    "categories": [
+      "stat.OT"
+    ]
+  },
+  {
+    "id": "arxiv:2610.10211",
+    "role": "negative",
+    "set": "2026-10-09",
+    "title": "Sequential Random Sampling PIR with Multiple Colluding Servers in DNA-Based Data Storage",
+    "abstract": "As DNA-based data storage evolves, protecting user privacy during data retrieval has become increasingly important. We study sequential random sampling DNA private information retrieval (SRS DNA PIR) with multiple colluding random sampling servers, where the database is partitioned into servers of equal size. We investigate the tradeoff between the download cost, defined as the expected number of queries, and the privacy leakage, measured by mutual information. We derive lower bounds on this tradeoff, including a bound given by an optimization problem. This bound is tight when each server stores two files, and we construct schemes that attain it. For servers of any size, we construct schemes that apply a single-server scheme to a randomly selected subset of servers.",
+    "published": "2026-10-07T15:07:37Z",
+    "categories": [
+      "cs.IT"
+    ]
+  },
+  {
+    "id": "arxiv:2610.10955",
+    "role": "positive",
+    "set": "context",
+    "title": "Learning Multi-Step Query Rewriting via Corpus Feedback for Conversational Search",
+    "abstract": "Conversational Query Rewriting (CQR) turns a context dependent user turn into a standalone query for a retriever, and most methods do this in a single step from the dialogue history before retrieving once. The rewrite is therefore fixed before any corpus evidence is available to correct its reference resolution or its vocabulary. We recast CQR as a sequential retrieval problem: an agent rewrites the current turn, retrieves, and conditions its next rewrite on the returned passages. The agent acts in a typed space of three rewriting operations, resolving conversational intent into a standalone query, generating lexical reformulations, or synthesizing pseudo-documents for document-to-document matching, together with a stop action that ends the episode. We train the policy with supervised fine-tuning followed by reinforcement learning against a single retrieval-quality reward, using no human rewrite annotations. Across TopiOCQA and QReCC, the agent outperforms several retrieval-aligned baselines, while remaining effective across retrieval backends and generalizing to the CAsT benchmarks without additional training. Further analysis shows that, through retrieval-reward optimization alone, the learned policy develops a behavior of grounding pseudo-documents in passages retrieved by earlier steps, substantially improving retrieval.",
+    "published": "2026-10-07T22:14:05Z",
+    "categories": [
+      "cs.IR"
+    ]
+  },
+  {
+    "id": "arxiv:2610.09985",
+    "role": "positive",
+    "set": "context",
+    "title": "Marrying Pricing and Advertising with LLMs",
+    "abstract": "We study a sequential pricing problem in which a seller jointly posts a price and an advertisement generated by a large language model (LLM). The seller aims to maximize revenue under an unknown product demand that depends on both decisions, while observing only whether each offer leads to a purchase. We propose an online actor-critic algorithm that combines low-rank adaptation (LoRA) of a pretrained LLM with a demand model fitted to available data. At each round, the actor generates an advertisement, and the critic estimates purchase probabilities to guide price selection. Then, the resulting feedback is used to update both the actor and the critic, with the critic's revenue estimates providing a baseline for policy gradient updates of the actor. To evaluate our approach, we develop an evaluation framework with three synthetic demand models and a demand simulator built from real-world marketplace data. Finally, we compare our algorithm with benchmarks that do not jointly optimize price selection and advertisement generation, achieving expected revenue gains over the reference policy of 5.69%, 5.18% and 55.96% under the three synthetic demand models and 5.81% under the marketplace simulator.",
+    "published": "2026-10-07T12:50:08Z",
+    "categories": [
+      "cs.GT",
+      "cs.LG"
+    ]
+  },
+  {
+    "id": "arxiv:2610.10124",
+    "role": "positive",
+    "set": "context",
+    "title": "Training with Missed Targets in Generative Recommendation: Separating Supervision from Probability Competition",
+    "abstract": "Generative recommenders return a limited candidate set and may omit observed targets before reranking. A training strategy appends these missed targets to reranker training lists, although inference still ranks only original candidates. This operation simultaneously changes retrieved-target weight, adds supervision over appended targets, and makes the two groups compete for probability. An append/no-append comparison therefore cannot explain changes in returned-item rankings. We construct three matched losses that hold retrieved-target weight fixed while introducing appended-target supervision and group competition separately. The intermediate loss trains within both groups but normalizes them separately, preventing training-only targets from competing with inference candidates. Experiments with a released OneRec model and locally trained Amazon generators show that this competition can harm returned-item ranking. In four prespecified Amazon Video Games comparisons, removing it improved full-target normalized discounted cumulative gain (FT-NDCG) by 7.8--22.2\\%; 95\\% intervals over users and three of four intervals over training runs excluded zero. A conservative development-set rule selected appended-target training for two of three generators in one held-out category and rejected it for all three in another, avoiding a 1.7\\% loss. Candidate completion should therefore be evaluated for each generator rather than applied automatically.",
+    "published": "2026-10-07T14:07:06Z",
+    "categories": [
+      "cs.IR",
+      "cs.LG"
+    ]
+  },
+  {
+    "id": "arxiv:2610.10173",
+    "role": "positive",
+    "set": "context",
+    "title": "When Exposure Is Not Attention: Auditing the Preference-Exposure-Consumption Gap in Personalized News Recommenders",
+    "abstract": "Personalized news platforms are often evaluated as if stated preferences, logged recommendation exposure, and click consumption form a single coherent pipeline. Collapsing these layers can distort audit conclusions: a platform may appear more aligned or diverse than observed click consumption supports, which can misdirect diversity governance or algorithmic intervention. We introduce a reusable Preference-Exposure-Consumption (PEC) audit framework that separates stated preference, observed weighted profile state, logged recommendation exposure, app-surface pathways, and click consumption under explicit observability boundaries. Using six months of logs from a deployed mobile news application, we audit 1,583 user profiles, 95,143 logged recommendation items, and 17,512 click events. Each trace type contributes distinct information; none directly substitutes for another. Preference-consumption alignment exceeds chance-based null baselines but captures only part of users' top-consumed category set. Logged recommendation lists contain clicked articles more often than a date-matched candidate-pool baseline predicts (11.29% vs 9.13%; top-5 lift 1.47x), but many clicks arrive through other app surfaces. Raw exposure-consumption diversity gaps shrink under count matching, yet concentration mismatch persists in the audit-eligible cohort (HHI gap 0.082). Together, the results show that audit conclusions change depending on whether platforms measure stated preference, logged exposure, or click consumption.",
+    "published": "2026-10-07T14:46:46Z",
+    "categories": [
+      "cs.SI"
+    ]
+  },
+  {
+    "id": "arxiv:2610.08743",
+    "role": "positive",
+    "set": "context",
+    "title": "Reinforcement Learning with Conformal Action Sets: An Application to Sequential Recommendation",
+    "abstract": "Sequential recommenders typically use a fixed slate size even though the number of useful alternatives changes within a session. We propose Reinforcement Learning with Calibrated Pruning (RLCP), which adapts the retained action set using critic scores and an online threshold. The threshold is updated from binary feedback indicating whether the set contains an action in a proxy target. We prove a deterministic bound on the observed proxy miss rate along adaptive trajectories. To quantify the effect of pruning on reward, we derive an exact decomposition of value loss into filtering and selection losses. Under explicit proxy and critic approximation conditions, this decomposition yields a finite session reward bound that also accounts for imperfect selection and set truncation, without requiring the learning parameters to converge. Experiments on KuaiRand-Pure and MovieLens 1M compare two RLCP implementations with four RL baselines. In each of the 19 configurations, at least one RLCP variant achieves the highest catalog diversity, reaching $1.11\\times$ to $5.21\\times$ that of the strongest baseline, with competitive session depth and no larger retained sets.",
+    "published": "2026-10-06T17:40:52Z",
+    "categories": [
+      "cs.LG",
+      "cs.AI"
+    ]
+  },
+  {
+    "id": "arxiv:2610.10920",
+    "role": "positive",
+    "set": "context",
+    "title": "Language Models for Page-Level Layout Decisions in E-commerce Search",
+    "abstract": "E-commerce search pages are critical touchpoints for millions of online shoppers. While traditional search engines return a ranked list of results, modern E-commerce search pages increasingly incorporate recommender system modules -- for example, secondary stacks that surface alternative product groupings at specific positions. When introduced appropriately, secondary stacks can improve user engagement; however, suboptimal placement may disrupt browsing flow and degrade the primary results. Unlike traditional search ranking, where evaluation techniques such as interleaving are well established, evaluating page-level layout changes e.g., when and where to insert a secondary stack remains challenging without costly online A/B testing. To address this, we study offline methods for evaluating whether a given layout decision -- specifically, the inclusion of a secondary stack at a particular position -- is beneficial to users. We investigate language models as scalable evaluators by comparing direct prompt-based, prompt-derived feature, and representation-based methods. Our results show that representation-based approaches consistently outperform prompt-based judging in predicting user engagement, suggesting they provide a reliable foundation for offline layout evaluation in E-commerce search.",
+    "published": "2026-10-07T21:19:47Z",
+    "categories": [
+      "cs.LG",
+      "cs.CL",
+      "cs.IR"
+    ]
+  }
+]
