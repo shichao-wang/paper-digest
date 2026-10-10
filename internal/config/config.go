@@ -10,13 +10,21 @@ import (
 	"os"
 	"regexp"
 	"strings"
+
+	"github.com/shichao-wang/paper-digest/internal/papers"
 )
 
 var topicIDPattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
 
+// builtinSelectionTopic keeps the current recommendation, advertising, and
+// search filter when an existing config omits topics[].selection.
+const builtinSelectionTopic = "recommendation-advertising-search"
+
 type Topic struct {
-	ID         string `json:"id"`
-	WebhookURL string `json:"webhook_url"`
+	ID         string            `json:"id"`
+	WebhookURL string            `json:"webhook_url"`
+	Selection  *papers.Selection `json:"selection,omitempty"`
+	rules      papers.Rules      `json:"-"`
 }
 
 type Config struct {
@@ -74,7 +82,46 @@ func Load(path string) (Config, error) {
 	if cfg.Arxiv.LookbackDays < 1 || cfg.Arxiv.LookbackDays > 30 {
 		return Config{}, errors.New("arxiv.lookback_days 必须为 1 到 30")
 	}
+	for i := range cfg.Topics {
+		topic := &cfg.Topics[i]
+		if topic.Selection == nil {
+			if topic.ID == builtinSelectionTopic {
+				topic.rules = papers.DefaultRules()
+			}
+			continue
+		}
+		compiled, err := papers.Compile(*topic.Selection)
+		if err != nil {
+			return Config{}, fmt.Errorf("主题 %s 的筛选规则无效: %w", topic.ID, err)
+		}
+		topic.rules = compiled
+	}
 	return cfg, nil
+}
+
+// TopicSelection returns the compiled rules and the JSON spec for a topic.
+// The joint topic uses the built-in rules when selection is omitted, including
+// for a Config value that was not loaded from JSON.
+func (c Config) TopicSelection(id string) (papers.Rules, papers.Selection, bool) {
+	for _, topic := range c.Topics {
+		if topic.ID != id {
+			continue
+		}
+		if topic.rules.Active() {
+			if topic.Selection != nil {
+				return topic.rules, *topic.Selection, true
+			}
+			if id == builtinSelectionTopic {
+				return topic.rules, papers.DefaultSelection(), true
+			}
+			return topic.rules, papers.Selection{}, true
+		}
+		if topic.Selection == nil && id == builtinSelectionTopic {
+			return papers.DefaultRules(), papers.DefaultSelection(), true
+		}
+		return papers.Rules{}, papers.Selection{}, false
+	}
+	return papers.Rules{}, papers.Selection{}, false
 }
 
 func (c Config) Webhook(topicID string) (string, error) {

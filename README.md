@@ -1,6 +1,6 @@
 # 论文日报
 
-Go + React 的本机论文日报服务。每天北京时间 08:00～09:00 从 arXiv 公开元数据中筛选推荐、广告或搜索相关论文，最多 5 篇，根据公开摘要生成中文要点；09:00 的一分钟内向飞书群机器人逐篇发送 Markdown 卡片。SQLite 保存每日精选、摘要版本、发送状态与去重历史，网页提供论文库、日报历史和主题推送配置。
+Go + React 的本机论文日报服务。每天北京时间 08:00～09:00 从 arXiv 公开元数据中按相关度筛选推荐、广告或搜索论文，最多 5 篇，相关论文不足时少发，根据公开摘要生成中文要点；09:00 的一分钟内向飞书群机器人逐篇发送 Markdown 卡片。SQLite 保存每日精选、摘要版本、发送状态与去重历史，网页提供论文库、日报历史和主题推送配置。
 
 **默认关闭自动任务**：示例中的 `delivery.enabled=false` 同时关闭采集、模型调用和推送，仍可浏览已有数据。空库不会自动填入示例。中文要点依据公开摘要，不能视为全文解读；当前自动任务只支持 `recommendation-advertising-search` 联合主题。
 
@@ -36,6 +36,20 @@ make preview # 仅渲染离线 fixture，不访问外部服务
 ```
 
 完整的宿主机配置、前后端双终端开发与演示步骤见 [开发指南](docs/development.md)。这些命令不会发送群消息或调用模型。
+
+## 改筛选规则前的人工评估
+
+筛选规则写在 `topics[].selection`。联合主题省略该段时使用内置规则，和现在的推荐、广告、搜索筛选一致。改规则不需要重新构建镜像：编辑宿主机上只读挂载的 `config.json`，再重启容器。
+
+草稿可以先对照，再决定要不要写进配置。预览不生成摘要、不发送飞书、不把论文标为已读，也不写入日报任务，也不会改正在使用的配置。
+
+1. 起草规则。页面打开 http://127.0.0.1:8081 ，侧栏进入「筛选评估」，文本框里是当前规则，改过之后点「用草稿对照」。或先执行 `paper-digest eval rules` 把当前规则打出来，另存为 `candidate.json` 再改。
+2. 对照当前规则。命令行执行 `docker exec paper-digest-paper-digest-1 /usr/local/bin/paper-digest eval --date 2026-10-09 --rules candidate.json`。日期段加上 `--to`。`--input papers.json` 用本地候选，不访问 arXiv。`--json` 输出完整结果。结果同时给出草稿、当前规则、宽松旧基线和当天已保存的日报。
+3. 标注。页面对每篇点「相关」或「不相关」。命令行可以执行 `paper-digest eval label --id arxiv:2610.10483 --label relevant --input papers.json`；省略 `--input` 时只更新判断，并保留已有论文快照。判断保存在 SQLite 的 `selection_labels`，打开数据库时自动建表。精确率按已标注的入选论文计算，草稿和当前规则各自一份。
+4. 需要回归样本时执行 `paper-digest eval fixtures`，或打开 `/api/eval/fixtures`。导出的 JSON 用 `positive` / `negative` 区分。
+5. 确认后再把 `selection` 放进宿主机的 `config/config.json`，然后 `docker compose up -d --force-recreate paper-digest`。这一步只重新创建容器，不构建镜像。
+
+`preview <fixture.json>` 仍只离线渲染 Markdown，不负责选题。
 
 ## 文档导航
 

@@ -1,7 +1,6 @@
 package papers
 
 import (
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -9,18 +8,26 @@ import (
 
 const maxDailyPapers = 5
 
-var (
-	searchWordPattern = regexp.MustCompile(`\bsearch\b`)
-	adsWordPattern    = regexp.MustCompile(`\bads\b`)
+// topicTier is how strongly a paper belongs in the recommendation, computational
+// advertising, or search-and-retrieval digest.
+//
+// Tier 2 is a title hit, or cs.IR plus a retrieval technique. Tier 1 is a strong
+// phrase that appears only in the abstract. Tier 0 is left out. cs.IR by itself
+// is not enough, because social-computing papers use that category. A lone
+// "recommendation", "search", or "ads" in the abstract is ordinary prose, not a
+// topic. Private information retrieval, including DNA-storage PIR, is a
+// different field and does not count as search.
+const (
+	tierOut      = 0
+	tierAbstract = 1
+	tierStrong   = 2
 )
 
-func Select(all []Paper, now time.Time, lookbackDays, max int, seen func(string) bool) []Paper {
-	if lookbackDays <= 0 || max <= 0 {
+func Select(all []Paper, now time.Time, lookbackDays int, rules Rules, seen func(string) bool) []Paper {
+	if !rules.active || lookbackDays <= 0 || rules.maxPapers <= 0 {
 		return nil
 	}
-	if max > maxDailyPapers {
-		max = maxDailyPapers
-	}
+	max := rules.maxPapers
 	cutoff := now.Add(-time.Duration(lookbackDays) * 24 * time.Hour)
 
 	candidateByID := make(map[string]Paper, len(all))
@@ -30,7 +37,7 @@ func Select(all []Paper, now time.Time, lookbackDays, max int, seen func(string)
 		if paper.ID == "" || paper.Published.IsZero() || paper.Published.Before(cutoff) || paper.Published.After(now) {
 			continue
 		}
-		if !isRASJointTopic(paper) {
+		if rules.explain(paper).Tier < rules.minTier {
 			continue
 		}
 		if seen != nil {
@@ -52,10 +59,14 @@ func Select(all []Paper, now time.Time, lookbackDays, max int, seen func(string)
 		candidates = append(candidates, paper)
 	}
 	sort.Slice(candidates, func(i, j int) bool {
-		if candidates[i].Published.Equal(candidates[j].Published) {
-			return candidates[i].ID < candidates[j].ID
+		left, right := rules.explain(candidates[i]).Tier, rules.explain(candidates[j]).Tier
+		if left != right {
+			return left > right
 		}
-		return candidates[i].Published.After(candidates[j].Published)
+		if !candidates[i].Published.Equal(candidates[j].Published) {
+			return candidates[i].Published.After(candidates[j].Published)
+		}
+		return candidates[i].ID < candidates[j].ID
 	})
 	if len(candidates) > max {
 		candidates = candidates[:max]
@@ -63,25 +74,25 @@ func Select(all []Paper, now time.Time, lookbackDays, max int, seen func(string)
 	return candidates
 }
 
-func isRASJointTopic(paper Paper) bool {
-	var search bool
-	for _, category := range paper.categories {
-		if strings.EqualFold(category, "cs.IR") {
-			search = true
-		}
-	}
-
-	text := strings.ToLower(paper.Title + " " + paper.Abstract)
-	recommendation := containsAny(text, "recommendation", "recommender", "collaborative filtering", "personalized recommendation")
-	advertising := containsAny(text, "advertising", "advertisement", "advertiser", "online ad", "ad click", "ad auction", "ad allocation", "ad placement", "ad targeting", "ad ranking", "click-through", "click through", "sponsored ad") || adsWordPattern.MatchString(text)
-	search = search || containsAny(text, "information retrieval", "retrieval system", "document retrieval", "query processing", "query understanding", "search engine", "web search", "search ranking", "search query", "search result") || searchWordPattern.MatchString(text)
-
-	return recommendation || advertising || search
+// Explanation is the topic decision for one paper: tier, the signals that fired,
+// and a short reason. Tier 0 is not selected when it is below the rules' minimum.
+type Explanation struct {
+	Tier    int      `json:"tier"`
+	Signals []string `json:"signals"`
+	Reason  string   `json:"reason"`
 }
 
-func containsAny(text string, terms ...string) bool {
-	for _, term := range terms {
-		if strings.Contains(text, term) {
+func Explain(paper Paper, rules Rules) Explanation {
+	return rules.explain(paper)
+}
+
+func topicTier(paper Paper) int {
+	return Explain(paper, DefaultRules()).Tier
+}
+
+func hasCategory(paper Paper, category string) bool {
+	for _, candidate := range paper.Categories {
+		if strings.EqualFold(candidate, category) {
 			return true
 		}
 	}

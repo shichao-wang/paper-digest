@@ -15,6 +15,18 @@ import (
 
 const defaultBaseURL = "https://export.arxiv.org/api/query"
 
+// legacyRASSearchQuery is the fielded title, abstract, and cs.IR query used
+// before selection rules moved into config. DefaultRules().Query must stay
+// byte-identical: arXiv's all: field also matches the PDF, so a citation or
+// the verb "recommend" was enough to crowd out the lookback window.
+const legacyRASSearchQuery = `(cat:cs.IR OR ti:recommender OR ti:recommendation OR abs:recommender OR abs:"collaborative filtering" OR ti:advertising OR ti:advertisement OR ti:advertiser OR abs:advertising OR abs:"click-through" OR abs:"sponsored search" OR abs:"ad auction" OR abs:"ad allocation" OR abs:"ad ranking" OR abs:"ad targeting" OR ti:retrieval OR abs:"information retrieval" OR abs:"document retrieval" OR abs:"dense retrieval" OR abs:"query understanding" OR abs:"query rewriting" OR abs:"learning to rank" OR ti:"web search" OR ti:"search engine" OR ti:"conversational search" OR abs:"search ranking" OR abs:"sequential recommendation")`
+
+var (
+	arxivPageSize  = 100
+	arxivMaxPages  = 16
+	arxivPageDelay = 3 * time.Second
+)
+
 var arxivIDPattern = regexp.MustCompile(`(?i)^((?:\d{4}\.\d{4,5})|(?:[a-z][a-z.-]*/\d{7}))(?:v([1-9]\d*))?$`)
 
 type Paper struct {
@@ -27,7 +39,7 @@ type Paper struct {
 	Abstract  string
 	URL       string
 
-	categories []string
+	Categories []string `json:"categories,omitempty"`
 }
 
 type atomFeed struct {
@@ -57,17 +69,67 @@ func Fetch(ctx context.Context, client *http.Client, baseURL string, limit int) 
 	if client == nil {
 		client = http.DefaultClient
 	}
+	return fetchPage(ctx, client, baseURL, 0, limit, DefaultRules().Query)
+}
+
+// FetchSince pages searchQuery newest first until a page ends before since or
+// the page cap is reached. since is the start of the lookback window. An empty
+// query is rejected so a caller cannot silently fall back to another topic.
+func FetchSince(ctx context.Context, client *http.Client, baseURL string, since time.Time, searchQuery string) ([]Paper, error) {
+	if strings.TrimSpace(searchQuery) == "" {
+		return nil, fmt.Errorf("arXiv search query is required")
+	}
+	if client == nil {
+		client = http.DefaultClient
+	}
+	if since.IsZero() {
+		return fetchPage(ctx, client, baseURL, 0, arxivPageSize, searchQuery)
+	}
+	var all []Paper
+	for page := 0; page < arxivMaxPages; page++ {
+		if page > 0 && arxivPageDelay > 0 {
+			timer := time.NewTimer(arxivPageDelay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return nil, ctx.Err()
+			case <-timer.C:
+			}
+		}
+		batch, err := fetchPage(ctx, client, baseURL, page*arxivPageSize, arxivPageSize, searchQuery)
+		if err != nil {
+			return nil, err
+		}
+		if len(batch) == 0 {
+			break
+		}
+		all = append(all, batch...)
+		if len(batch) < arxivPageSize || !submittedInWindow(batch[len(batch)-1], since) {
+			break
+		}
+	}
+	return all, nil
+}
+
+func submittedInWindow(paper Paper, since time.Time) bool {
+	updated := paper.Updated
+	if updated.IsZero() {
+		updated = paper.Published
+	}
+	return !updated.Before(since) || !paper.Published.Before(since)
+}
+
+func fetchPage(ctx context.Context, client *http.Client, baseURL string, start, limit int, searchQuery string) ([]Paper, error) {
 	if baseURL == "" {
 		baseURL = defaultBaseURL
 	}
-
 	endpoint, err := url.Parse(baseURL)
 	if err != nil || endpoint.Scheme == "" || endpoint.Host == "" || (endpoint.Scheme != "http" && endpoint.Scheme != "https") {
 		return nil, fmt.Errorf("invalid arXiv API base URL %q", baseURL)
 	}
 	query := endpoint.Query()
-	query.Set("search_query", `(all:recommendation OR all:recommender OR all:advertising OR all:advertisement OR all:"click-through rate" OR all:"information retrieval" OR all:"search engine" OR all:"web search" OR all:"search ranking" OR all:"query processing" OR all:"query understanding" OR all:"sponsored search" OR all:"ad auction" OR all:"ad allocation" OR all:"ad ranking" OR all:"ad targeting")`)
-	query.Set("start", "0")
+	query.Set("search_query", searchQuery)
+	query.Set("start", fmt.Sprint(start))
 	query.Set("max_results", fmt.Sprint(limit))
 	query.Set("sortBy", "submittedDate")
 	query.Set("sortOrder", "descending")
@@ -142,7 +204,7 @@ func parseEntry(entry atomEntry) (Paper, error) {
 		Updated:    updated,
 		Abstract:   normalizeSpace(entry.Summary),
 		URL:        "https://arxiv.org/abs/" + strings.TrimPrefix(id, "arxiv:") + versionSuffix,
-		categories: categories,
+		Categories: categories,
 	}, nil
 }
 

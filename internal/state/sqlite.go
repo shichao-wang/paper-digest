@@ -256,6 +256,14 @@ CREATE INDEX IF NOT EXISTS job_papers_pending
 	ON job_papers(topic, date, position) WHERE summary IS NULL;
 CREATE INDEX IF NOT EXISTS jobs_pending
 	ON jobs(date, topic) WHERE status IN ('new', 'processing', 'ready');
+CREATE TABLE IF NOT EXISTS selection_labels (
+	topic TEXT NOT NULL,
+	paper_id TEXT NOT NULL,
+	label TEXT NOT NULL CHECK (label IN ('relevant', 'not_relevant')),
+	snapshot TEXT NOT NULL DEFAULT '',
+	updated_at TEXT NOT NULL,
+	PRIMARY KEY (topic, paper_id)
+);
 `
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("initialize sqlite schema: %w", err)

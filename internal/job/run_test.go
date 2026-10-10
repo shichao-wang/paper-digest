@@ -43,6 +43,7 @@ func testRunner(t *testing.T) *Runner {
 		}),
 		LookbackDays: 7,
 		Now:          func() time.Time { return now },
+		Rules:        papers.DefaultRules(),
 	}
 }
 

@@ -28,8 +28,8 @@ func TestFetchParsesAtomFeedAndQuery(t *testing.T) {
 		if got := r.URL.Query().Get("keep"); got != "yes" {
 			t.Errorf("existing query parameter = %q, want yes", got)
 		}
-		if got := r.URL.Query().Get("search_query"); !strings.Contains(got, "all:recommendation") || !strings.Contains(got, "all:advertising") || strings.Contains(got, "cat:cs.IR") || strings.Contains(got, "econ.GN") {
-			t.Errorf("search_query = %q, want focused RAS terms", got)
+		if got := r.URL.Query().Get("search_query"); !strings.Contains(got, "cat:cs.IR") || !strings.Contains(got, "ti:recommendation") || !strings.Contains(got, "abs:advertising") || strings.Contains(got, "all:") || strings.Contains(got, "econ.GN") {
+			t.Errorf("search_query = %q, want title, abstract, and cs.IR terms without full-text search", got)
 		}
 		w.Header().Set("Content-Type", "application/atom+xml")
 		fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?>
@@ -84,8 +84,8 @@ func TestFetchParsesAtomFeedAndQuery(t *testing.T) {
 	if first.URL != "https://arxiv.org/abs/2401.01234v2" {
 		t.Errorf("URL = %q", first.URL)
 	}
-	if len(first.categories) != 2 || first.categories[0] != "cs.IR" {
-		t.Errorf("categories = %#v", first.categories)
+	if len(first.Categories) != 2 || first.Categories[0] != "cs.IR" {
+		t.Errorf("categories = %#v", first.Categories)
 	}
 	if got[1].Version != "" || got[1].URL != "https://arxiv.org/abs/2401.01235" {
 		t.Errorf("unversioned paper = %#v", got[1])
@@ -102,7 +102,7 @@ func TestParseID(t *testing.T) {
 		{input: "http://arxiv.org/abs/2401.12345v3", id: "arxiv:2401.12345", version: "v3"},
 		{input: "https://arxiv.org/abs/2401.1234", id: "arxiv:2401.1234"},
 		{input: "http://arxiv.org/abs/hep-th/9901001v2", id: "arxiv:hep-th/9901001", version: "v2"},
-			{input: "arxiv:2401.12345v1", id: "arxiv:2401.12345", version: "v1"},
+		{input: "arxiv:2401.12345v1", id: "arxiv:2401.12345", version: "v1"},
 		{input: "not-an-arxiv-id", wantErr: true},
 	}
 	for _, tt := range tests {
@@ -146,10 +146,101 @@ func TestFetchRejectsBadResponses(t *testing.T) {
 	})
 }
 
+func useFetchPaging(t *testing.T, pageSize, maxPages int, delay time.Duration) {
+	t.Helper()
+	prevSize, prevPages, prevDelay := arxivPageSize, arxivMaxPages, arxivPageDelay
+	arxivPageSize, arxivMaxPages, arxivPageDelay = pageSize, maxPages, delay
+	t.Cleanup(func() {
+		arxivPageSize, arxivMaxPages, arxivPageDelay = prevSize, prevPages, prevDelay
+	})
+}
+
+func atomEntryXML(id, published, updated, title string) string {
+	if updated == "" {
+		updated = published
+	}
+	return `<entry><id>http://arxiv.org/abs/` + id + `</id><published>` + published + `</published><updated>` + updated + `</updated><title>` + title + `</title><summary>Abstract.</summary></entry>`
+}
+
+func TestFetchSinceStopsAtLookbackAndKeepsPagingAfterUpdates(t *testing.T) {
+	useFetchPaging(t, 2, 5, 0)
+	var starts []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := r.URL.Query().Get("start")
+		starts = append(starts, start)
+		if !strings.Contains(r.URL.Query().Get("search_query"), "cat:cs.IR") || strings.Contains(r.URL.Query().Get("search_query"), "all:") {
+			t.Errorf("search_query = %q", r.URL.Query().Get("search_query"))
+		}
+		var body string
+		switch start {
+		case "0":
+			body = atomEntryXML("2401.00001", "2026-10-08T00:00:00Z", "", "Newest") +
+				atomEntryXML("2401.00002", "2026-10-07T00:00:00Z", "", "Still new")
+		case "2":
+			body = atomEntryXML("2401.00003", "2020-01-01T00:00:00Z", "2026-10-08T00:00:00Z", "Updated old paper") +
+				atomEntryXML("2401.00004", "2026-10-06T00:00:00Z", "", "Still inside window")
+		case "4":
+			body = atomEntryXML("2401.00005", "2026-10-05T00:00:00Z", "", "Boundary") +
+				atomEntryXML("2401.00006", "2026-10-01T00:00:00Z", "2026-10-01T00:00:00Z", "Before window")
+		default:
+			t.Errorf("unexpected start %q", start)
+		}
+		fmt.Fprintf(w, `<feed xmlns="http://www.w3.org/2005/Atom">%s</feed>`, body)
+	}))
+	defer server.Close()
+
+	since := time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC)
+	got, err := FetchSince(context.Background(), server.Client(), server.URL, since, DefaultRules().Query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(starts, ",") != "0,2,4" {
+		t.Fatalf("pages = %v, want start 0, 2, 4", starts)
+	}
+	if len(got) != 6 {
+		t.Fatalf("FetchSince() returned %d papers, want 6", len(got))
+	}
+}
+
+func TestFetchSinceStopsOnShortPageAndCancel(t *testing.T) {
+	t.Run("short page", func(t *testing.T) {
+		useFetchPaging(t, 2, 5, 0)
+		calls := 0
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			fmt.Fprintf(w, `<feed xmlns="http://www.w3.org/2005/Atom">%s</feed>`, atomEntryXML("2401.00010", "2026-10-08T00:00:00Z", "", "Only one"))
+		}))
+		defer server.Close()
+		got, err := FetchSince(context.Background(), server.Client(), server.URL, time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), DefaultRules().Query)
+		if err != nil || len(got) != 1 || calls != 1 {
+			t.Fatalf("got %d papers, calls %d, err %v", len(got), calls, err)
+		}
+	})
+
+	t.Run("cancel between pages", func(t *testing.T) {
+		useFetchPaging(t, 1, 5, time.Hour)
+		ctx, cancel := context.WithCancel(context.Background())
+		calls := 0
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			if calls > 1 {
+				t.Error("fetched another page after cancel")
+			}
+			cancel()
+			fmt.Fprintf(w, `<feed xmlns="http://www.w3.org/2005/Atom">%s</feed>`, atomEntryXML("2401.00011", "2026-10-08T00:00:00Z", "", "One"))
+		}))
+		defer server.Close()
+		_, err := FetchSince(ctx, server.Client(), server.URL, time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), DefaultRules().Query)
+		if err == nil || calls != 1 {
+			t.Fatalf("err = %v, calls = %d, want cancellation after the first page", err, calls)
+		}
+	})
+}
+
 func TestSelectFiltersAndCapsResults(t *testing.T) {
 	now := time.Date(2026, time.September, 27, 12, 0, 0, 0, time.UTC)
 	papers := []Paper{
-		{ID: "recent-a", Published: now.Add(-time.Hour), Title: "Collaborative recommendation for web search", categories: []string{"cs.IR"}},
+		{ID: "recent-a", Published: now.Add(-time.Hour), Title: "Collaborative recommendation for web search", Categories: []string{"cs.IR"}},
 		{ID: "recent-b", Published: now.Add(-2 * time.Hour), Title: "Sponsored search advertising auctions"},
 		{ID: "recent-c", Published: now.Add(-3 * time.Hour), Title: "Personalized recommendation in information retrieval"},
 		{ID: "recent-d", Published: now.Add(-4 * time.Hour), Title: "Online advertising recommendation systems"},
@@ -159,7 +250,7 @@ func TestSelectFiltersAndCapsResults(t *testing.T) {
 		{ID: "old", Published: now.Add(-8 * 24 * time.Hour), Title: "Recommendation for web search"},
 		{ID: "future", Published: now.Add(time.Minute), Title: "Recommendation for web search"},
 		{ID: "already-seen", Published: now, Title: "Recommendation for search advertising"},
-		{ID: "recent-a", Published: now.Add(-30 * time.Minute), Title: "Collaborative recommendation for web search", categories: []string{"cs.IR"}},
+		{ID: "recent-a", Published: now.Add(-30 * time.Minute), Title: "Collaborative recommendation for web search", Categories: []string{"cs.IR"}},
 	}
 	seenCalls := make(map[string]int)
 	seen := func(id string) bool {
@@ -167,7 +258,7 @@ func TestSelectFiltersAndCapsResults(t *testing.T) {
 		return id == "already-seen"
 	}
 
-	got := Select(papers, now, 7, 50, seen)
+	got := Select(papers, now, 7, DefaultRules(), seen)
 	if len(got) != maxDailyPapers {
 		t.Fatalf("Select() returned %d papers, want cap %d", len(got), maxDailyPapers)
 	}
@@ -190,13 +281,13 @@ func TestSelectFiltersAndCapsResults(t *testing.T) {
 func TestSelectUsesUnionOfRASTopics(t *testing.T) {
 	now := time.Now().UTC()
 	got := Select([]Paper{
-		{ID: "category-search", Published: now, Title: "Information retrieval", categories: []string{"cs.IR"}},
+		{ID: "category-search", Published: now, Title: "Information retrieval", Categories: []string{"cs.IR"}},
 		{ID: "keyword-cross", Published: now, Title: "Ad ranking for sponsored search recommendation"},
 		{ID: "recommendation-only", Published: now, Title: "Collaborative filtering for personalized recommendation"},
 		{ID: "advertising-only", Published: now, Title: "Online advertising auction design"},
 		{ID: "search-only", Published: now, Title: "Search engine query processing"},
 		{ID: "unrelated", Published: now, Title: "Research on molecular embeddings"},
-	}, now, 7, 5, nil)
+	}, now, 7, DefaultRules(), nil)
 	if len(got) != 5 {
 		t.Fatalf("Select() returned %d papers, want 5 papers matching the RAS union", len(got))
 	}

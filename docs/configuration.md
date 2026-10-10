@@ -13,11 +13,20 @@
 | `anthropic.api_key` | 空字符串 | 启用 worker 时必须非空；从配置读取 |
 | `anthropic.model` | 示例及代码回退为 `claude-opus-5` | 按所用服务实际支持的模型填写；仓库示例不保证服务端可用性 |
 | `anthropic.base_url` | 空字符串 | 使用 SDK 默认地址；自定义地址要求 HTTP/HTTPS、无 URL 凭据、查询参数或片段 |
-| `arxiv.lookback_days` | `7` | 始终校验为 1～30；按论文首次发布日期筛选 |
+| `arxiv.lookback_days` | `7` | 始终校验为 1～30；按论文首次发布日期筛选，采集会分页覆盖该窗口 |
 | `topics[].id` | `recommendation-advertising-search` | 至少一个，唯一，以小写字母开头，后续用小写字母、数字和分隔用连字符 |
 | `topics[].webhook_url` | 新配置省略 | 仅用于旧配置迁移；新地址通过页面保存到 SQLite |
+| `topics[].selection` | 联合主题省略时使用内置规则 | 该主题的 arXiv 查询、屏蔽、信号、分档和每日上限。见下文 |
 
-使用 [Compose 示例](../config/config.example.json) 或 [宿主机示例](../config/config.local.example.json)；对应的实际配置 `config/config.json`、`config/config.local.json` 均被 Git 和 Docker 构建忽略。配置没有热加载，Webhook 通过数据库动态读取。直接运行 CLI 默认读取工作目录下的 `config/config.json`，其他路径在子命令前指定 `--config <文件>`；`health` 和 `preview` 不读取配置。
+使用 [Compose 示例](../config/config.example.json) 或 [宿主机示例](../config/config.local.example.json)；对应的实际配置 `config/config.json`、`config/config.local.json` 均被 Git 和 Docker 构建忽略。配置没有热加载，Webhook 通过数据库动态读取。直接运行 CLI 默认读取工作目录下的 `config/config.json`，其他路径在子命令前指定 `--config <文件>`；`health` 和 `preview` 不读取配置。`eval` 读取数据库路径、`arxiv.lookback_days` 和主题的 `selection`。没有 `selection` 的旧配置仍能加载。
+
+## 筛选规则
+
+`topics[].selection` 是可选对象。`recommendation-advertising-search` 省略它时使用程序内置的推荐、广告和搜索规则，行为与写明示例里的整段规则相同。其他主题省略它则没有筛选规则，筛选评估会拒绝该主题。写了 `selection` 就会在加载时编译：`max_papers` 为 1～20，`min_tier` 为 1～5，查询至少要有一个分类或检索词，正则必须能编译。错误会指出哪一条规则无效，但不会把正则原文打出来。
+
+规则在小写后的标题和摘要上匹配。`query.categories` 和 `query.terms`（`field` 为 `title` 或 `abstract`）组成 arXiv 的 `cat:` / `ti:` / `abs:` 查询，不用 `all:`。`masks` 先从文本里去掉指定短语，并可以作为排除信号。`signals` 用 `pattern`、`categories` 或 `near` 三者之一；`unless` 指向已经定义、且自身没有 `unless` 的信号。`decisions` 按顺序采用第一条满足条件的分档。低于 `min_tier` 的论文不入选。`SelectLoose` 仍是改规则之前的宽松基线，每天最多 5 篇，不受这里的 `max_papers` 影响。
+
+草稿不写配置：`paper-digest eval --rules candidate.json`，或在「筛选评估」里编辑文本框后点「用草稿对照」。`paper-digest eval rules` 只打印当前主题的规则。确认后再把对象放进宿主机配置的 `topics[].selection`，执行 `docker compose up -d --force-recreate paper-digest`。容器只读挂载配置，这一步不构建镜像。
 
 ## 配置加载
 

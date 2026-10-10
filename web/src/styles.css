@@ -164,6 +164,25 @@ h1, h2, h3, p { margin-top: 0; }
 .settings-notes p { font-size: 12px; color: var(--muted); line-height: 1.9; margin-bottom: 6px; }
 .settings-notes p:last-child { margin-bottom: 0; }
 .mobile-back { display: none; }
+.rules-editor { display: grid; gap: 8px; margin-bottom: 18px; }
+.rules-editor textarea { width: 100%; min-height: 220px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.5; }
+.rules-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.eval-note { font-size: 13px; color: var(--muted); line-height: 1.7; margin: 0 0 18px; }
+.eval-form { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end; margin-bottom: 22px; }
+.eval-form > a { font-size: 13px; padding-bottom: 8px; }
+.eval-score { background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 16px 18px; margin-bottom: 18px; font-size: 14px; line-height: 1.7; }
+.eval-selected { margin: 0 0 18px; padding-left: 20px; }
+.eval-selected li { margin-bottom: 8px; }
+.eval-diff { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 22px; }
+.eval-diff section { background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; min-width: 0; }
+.eval-diff h3, .eval-day > h3 { font-size: 14px; margin-bottom: 10px; }
+.eval-diff ul { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.6; }
+.eval-candidate { background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 16px 18px; margin-bottom: 12px; }
+.eval-candidate header { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+.eval-candidate h3 { font-size: 16px; margin: 0 0 6px; line-height: 1.5; }
+.eval-meta { color: var(--muted); font-size: 12px; line-height: 1.7; margin: 0 0 4px; }
+.eval-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.eval-actions button[aria-pressed="true"] { background: #e3ebf8; color: var(--blue); border-color: #2458a6; }
 @media (min-width: 1600px) { .app-shell { padding: 0 55px; } }
 @media (max-width: 1050px) {
   .app-shell { padding: 0 25px; }
@@ -223,5 +242,7 @@ h1, h2, h3, p { margin-top: 0; }
   .settings-heading p { font-size: 12px; }
   .settings-actions button { min-height: 42px; }
   .abstract-text { font-size: 14px; }
+  .eval-diff { grid-template-columns: 1fr; }
+  .eval-candidate header { display: block; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; } }
