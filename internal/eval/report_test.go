@@ -29,23 +29,19 @@ func TestDatesRejectsInvertedAndLongRanges(t *testing.T) {
 }
 
 func TestBuildComparesCurrentLooseAndSentWithoutUsingLabelsOutsideSelection(t *testing.T) {
-	cutoff, err := Cutoff("2026-10-09")
-	if err != nil {
-		t.Fatal(err)
-	}
 	strong := papers.Paper{
 		ID: "arxiv:strong", Title: "Sequential Recommendation",
-		Published: cutoff.Add(-48 * time.Hour), Categories: []string{"cs.IR"},
+		Published: time.Date(2026, 10, 7, 15, 0, 0, 0, time.UTC), Categories: []string{"cs.IR"},
 		URL: "https://arxiv.org/abs/strong",
 	}
 	weak := papers.Paper{
 		ID: "arxiv:weak", Title: "Cross community", Abstract: "social",
-		Published: cutoff.Add(-time.Hour), Categories: []string{"cs.IR"},
+		Published: time.Date(2026, 10, 7, 17, 30, 0, 0, time.UTC), Categories: []string{"cs.IR"},
 		URL: "https://arxiv.org/abs/weak",
 	}
-	plainNew := papers.Paper{ID: "arxiv:plain-new", Title: "Unrelated physics", Published: cutoff.Add(-30 * time.Minute)}
-	plainOld := papers.Paper{ID: "arxiv:plain-old", Title: "Older physics", Published: cutoff.Add(-72 * time.Hour)}
-	outside := papers.Paper{ID: "arxiv:outside", Title: "Web Search Ranking", Published: cutoff.Add(-8 * 24 * time.Hour)}
+	plainNew := papers.Paper{ID: "arxiv:plain-new", Title: "Unrelated physics", Published: time.Date(2026, 10, 7, 17, 0, 0, 0, time.UTC)}
+	plainOld := papers.Paper{ID: "arxiv:plain-old", Title: "Older physics", Published: time.Date(2026, 10, 7, 16, 0, 0, 0, time.UTC)}
+	outside := papers.Paper{ID: "arxiv:outside", Title: "Web Search Ranking", Published: time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)}
 	fetched := []papers.Paper{plainOld, weak, strong, plainNew, outside}
 	sent := map[string][]SentPaper{
 		"2026-10-09": {
@@ -56,7 +52,7 @@ func TestBuildComparesCurrentLooseAndSentWithoutUsingLabelsOutsideSelection(t *t
 	}
 	labels := map[string]string{strong.ID: LabelRelevant, weak.ID: LabelNotRelevant}
 
-	report, err := Build("recommendation-advertising-search", []string{"2026-10-09"}, 7, papers.DefaultRules(), nil, fetched, sent, labels)
+	report, err := Build("recommendation-advertising-search", []string{"2026-10-09"}, papers.DefaultRules(), nil, fetched, sent, labels)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +88,7 @@ func TestBuildComparesCurrentLooseAndSentWithoutUsingLabelsOutsideSelection(t *t
 		t.Fatalf("format = %s", text)
 	}
 
-	unlabeled, err := Build("recommendation-advertising-search", []string{"2026-10-09"}, 7, papers.DefaultRules(), nil, fetched, nil, nil)
+	unlabeled, err := Build("recommendation-advertising-search", []string{"2026-10-09"}, papers.DefaultRules(), nil, fetched, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,15 +98,19 @@ func TestBuildComparesCurrentLooseAndSentWithoutUsingLabelsOutsideSelection(t *t
 	if !strings.Contains(Format(unlabeled), "精确率暂无") {
 		t.Fatal(Format(unlabeled))
 	}
-	if _, err := Build("topic", []string{"2026-10-09"}, 0, papers.DefaultRules(), nil, nil, nil, nil); err == nil {
-		t.Fatal("lookback 0 was accepted")
+	sunday, err := Build("recommendation-advertising-search", []string{"2026-10-11"}, papers.DefaultRules(), nil, fetched, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sunday.Days[0].HasBatch || len(sunday.Days[0].Selected) != 0 || !strings.Contains(Format(sunday), "没有新的 arXiv 公告") {
+		t.Fatalf("sunday = %+v", sunday.Days[0])
 	}
 }
 
 func TestCollectedPapersStayVisibleAboveThePushCap(t *testing.T) {
-	cutoff, err := Cutoff("2026-10-09")
-	if err != nil {
-		t.Fatal(err)
+	batch, ok, err := papers.DigestBatch("2026-10-09")
+	if err != nil || !ok {
+		t.Fatalf("batch ok=%v err=%v", ok, err)
 	}
 	spec := papers.DefaultSelection()
 	spec.MaxPapers = 2
@@ -123,11 +123,11 @@ func TestCollectedPapersStayVisibleAboveThePushCap(t *testing.T) {
 		fetched[i] = papers.Paper{
 			ID:        "arxiv:p" + string(rune('0'+i)),
 			Title:     "Web Search Ranking",
-			Published: cutoff.Add(-time.Duration(i+1) * time.Hour),
+			Published: batch.Window.Through.Add(-time.Duration(i+1) * time.Hour),
 			URL:       "https://arxiv.org/abs/example",
 		}
 	}
-	report, err := Build("recommendation-advertising-search", []string{"2026-10-09"}, 7, rules, nil, fetched, nil, nil)
+	report, err := Build("recommendation-advertising-search", []string{"2026-10-09"}, rules, nil, fetched, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

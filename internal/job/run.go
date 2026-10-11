@@ -15,13 +15,12 @@ import (
 const Topic = "recommendation-advertising-search"
 
 type Runner struct {
-	Store        *state.Store
-	Fetch        func(context.Context) ([]papers.Paper, error)
-	Analyzer     digest.Analyzer
-	Sender       delivery.Sender
-	LookbackDays int
-	Now          func() time.Time
-	Rules        papers.Rules
+	Store    *state.Store
+	Fetch    func(context.Context, papers.Batch) ([]papers.Paper, error)
+	Analyzer digest.Analyzer
+	Sender   delivery.Sender
+	Now      func() time.Time
+	Rules    papers.Rules
 }
 
 func BeijingDate(now time.Time) string {
@@ -45,25 +44,34 @@ func (r *Runner) Generate(ctx context.Context, date string) error {
 		return nil
 	}
 	if current.Status == "new" {
-		all, err := r.Fetch(ctx)
+		batch, ok, err := papers.DigestBatch(date)
 		if err != nil {
-			return fmt.Errorf("获取 arXiv 论文失败: %w", err)
+			return err
 		}
-		var seenErr error
-		seen := func(id string) bool {
-			yes, err := r.Store.Seen(ctx, Topic, id)
-			if err != nil {
-				seenErr = err
-				return true
+		var collected []papers.Paper
+		if ok {
+			if r.Fetch == nil {
+				return errors.New("获取 arXiv 论文失败: 未配置采集")
 			}
-			return yes
+			all, err := r.Fetch(ctx, batch)
+			if err != nil {
+				return fmt.Errorf("获取 arXiv 论文失败: %w", err)
+			}
+			var seenErr error
+			seen := func(id string) bool {
+				yes, err := r.Store.Seen(ctx, Topic, id)
+				if err != nil {
+					seenErr = err
+					return true
+				}
+				return yes
+			}
+			collected = papers.Select(all, batch.Window, r.Rules, seen)
+			if seenErr != nil {
+				return seenErr
+			}
 		}
-		collected := papers.Select(all, r.Now(), r.LookbackDays, r.Rules, seen)
-		if seenErr != nil {
-			return seenErr
-		}
-		// Summaries run only for the papers that will be pushed. The lookback
-		// window can contain more qualifying papers than the daily digest holds.
+		// Summaries run only for the papers that will be pushed.
 		if err := r.Store.SaveCandidates(ctx, Topic, date, papers.ForPush(collected, r.Rules.MaxPapers())); err != nil {
 			return err
 		}

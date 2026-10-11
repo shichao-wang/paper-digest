@@ -3,7 +3,6 @@ package papers
 import (
 	"sort"
 	"strings"
-	"time"
 )
 
 const maxDailyPapers = 5
@@ -23,17 +22,16 @@ const (
 	tierStrong   = 2
 )
 
-func Select(all []Paper, now time.Time, lookbackDays int, rules Rules, seen func(string) bool) []Paper {
-	if !rules.active || lookbackDays <= 0 {
+func Select(all []Paper, window Window, rules Rules, seen func(string) bool) []Paper {
+	if !rules.active || !window.Valid() {
 		return nil
 	}
-	cutoff := now.Add(-time.Duration(lookbackDays) * 24 * time.Hour)
 
 	candidateByID := make(map[string]Paper, len(all))
 	seenState := make(map[string]bool, len(all))
 	checkedSeen := make(map[string]bool, len(all))
 	for _, paper := range all {
-		if paper.ID == "" || paper.Published.IsZero() || paper.Published.Before(cutoff) || paper.Published.After(now) {
+		if paper.ID == "" || !window.Contains(paper.Published) {
 			continue
 		}
 		if rules.explain(paper).Tier < rules.minTier {

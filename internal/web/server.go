@@ -25,15 +25,14 @@ import (
 type Options struct {
 	DeliveryEnabled bool
 	Topics          []config.Topic
-	LookbackDays    int
 	// Rules and Selections are the compiled filters and their JSON specs.
 	// When both maps are empty, the joint topic gets the built-in rules.
 	Rules      map[string]papers.Rules
 	Selections map[string]papers.Selection
-	// Fetch loads arXiv candidates for a selection preview. since is the start
-	// of the lookback window, and the string is the arXiv search query. A nil
-	// Fetch uses the public arXiv API.
-	Fetch func(context.Context, time.Time, string) ([]papers.Paper, error)
+	// Fetch loads arXiv candidates for one or more digest dates. The window is
+	// the union of their submission intervals, and the string is the arXiv
+	// search query. A nil Fetch uses the public arXiv API.
+	Fetch func(context.Context, papers.Window, string) ([]papers.Paper, error)
 }
 
 type topicRecord struct {
@@ -71,14 +70,6 @@ func New(store *state.Store, staticFS fs.FS, options ...Options) (http.Handler, 
 			s.defaultTopic = topic.ID
 		}
 	}
-	lookback := settings.LookbackDays
-	if lookback == 0 {
-		lookback = 7
-	}
-	if lookback < 1 || lookback > 30 {
-		return nil, fmt.Errorf("web: lookback days must be from 1 to 30")
-	}
-	s.lookbackDays = lookback
 	s.fetch = settings.Fetch
 	s.rules = settings.Rules
 	s.selections = settings.Selections
@@ -107,8 +98,7 @@ type server struct {
 	files        http.Handler
 	topics       []topicRecord
 	defaultTopic string
-	lookbackDays int
-	fetch        func(context.Context, time.Time, string) ([]papers.Paper, error)
+	fetch        func(context.Context, papers.Window, string) ([]papers.Paper, error)
 	rules        map[string]papers.Rules
 	selections   map[string]papers.Selection
 }

@@ -101,14 +101,17 @@ func TestOctober9ExclusionReasons(t *testing.T) {
 }
 
 func TestLooseBaselineKeepsOctober9WeakDay(t *testing.T) {
-	now := time.Date(2026, 10, 9, 8, 0, 0, 0, time.UTC)
 	var day []Paper
 	for _, fixture := range loadRASFixtures(t) {
 		if fixture.Set == "2026-10-09" {
 			day = append(day, fixture.paper())
 		}
 	}
-	got := SelectLoose(day, now, 7, 5, nil)
+	batch, ok, err := DigestBatch("2026-10-09")
+	if err != nil || !ok {
+		t.Fatalf("batch ok=%v err=%v", ok, err)
+	}
+	got := SelectLoose(day, batch.Window, 5, nil)
 	want := []string{"arxiv:2610.10483", "arxiv:2610.10441", "arxiv:2610.10256", "arxiv:2610.10224", "arxiv:2610.10211"}
 	if len(got) != len(want) {
 		t.Fatalf("SelectLoose() = %d papers, want %d", len(got), len(want))
@@ -118,14 +121,17 @@ func TestLooseBaselineKeepsOctober9WeakDay(t *testing.T) {
 			t.Fatalf("loose position %d = %s, want %s", i, got[i].ID, id)
 		}
 	}
-	skipped := SelectLoose(day, now, 7, 5, func(id string) bool { return id == "arxiv:2610.10483" })
+	skipped := SelectLoose(day, batch.Window, 5, func(id string) bool { return id == "arxiv:2610.10483" })
 	if len(skipped) != 4 || skipped[0].ID != "arxiv:2610.10441" {
 		t.Fatalf("seen paper was not dropped: %+v", skipped)
 	}
 }
 
 func TestOctober9WeakDayDoesNotPad(t *testing.T) {
-	now := time.Date(2026, 10, 9, 8, 0, 0, 0, time.UTC)
+	batch, ok, err := DigestBatch("2026-10-09")
+	if err != nil || !ok {
+		t.Fatalf("batch ok=%v err=%v", ok, err)
+	}
 	var day []Paper
 	for _, fixture := range loadRASFixtures(t) {
 		if fixture.Set == "2026-10-09" {
@@ -141,7 +147,7 @@ func TestOctober9WeakDayDoesNotPad(t *testing.T) {
 		t.Fatalf("newest weak-day paper = %s, want the on-topic softmax paper", byDate[0].ID)
 	}
 
-	got := Select(day, now, 7, DefaultRules(), nil)
+	got := Select(day, batch.Window, DefaultRules(), nil)
 	if len(got) != 1 || got[0].ID != "arxiv:2610.10483" {
 		ids := make([]string, len(got))
 		for i, paper := range got {
@@ -152,7 +158,6 @@ func TestOctober9WeakDayDoesNotPad(t *testing.T) {
 }
 
 func TestNewerOffTopicPapersDoNotCrowdOutOlderMatches(t *testing.T) {
-	now := time.Date(2026, 10, 9, 8, 0, 0, 0, time.UTC)
 	fixtures := loadRASFixtures(t)
 	all := make([]Paper, 0, len(fixtures))
 	positive := make([]Paper, 0, len(fixtures))
@@ -191,7 +196,7 @@ func TestNewerOffTopicPapersDoNotCrowdOutOlderMatches(t *testing.T) {
 		return positive[i].Published.After(positive[j].Published)
 	})
 	want := positive[:maxDailyPapers]
-	got := Select(all, now, 7, DefaultRules(), nil)
+	got := Select(all, Window{After: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), Through: time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC)}, DefaultRules(), nil)
 	if len(got) != len(positive) {
 		t.Fatalf("Select() returned %d papers, want all %d positives", len(got), len(positive))
 	}
@@ -220,7 +225,7 @@ func TestSelectDropsIncidentalWordsAndRanksRelevance(t *testing.T) {
 		{ID: "suggestion", Published: now.Add(-2 * time.Minute), Title: "A methods note", Abstract: "We offer different recommendations on the experimental setup and recommend further search."},
 		{ID: "category-only", Published: now.Add(-3 * time.Minute), Title: "Bridging online communities", Abstract: "A dual-pane social interface for civic discourse.", Categories: []string{"cs.HC", "cs.IR"}},
 		{ID: "abstract-recsys", Published: now.Add(-3 * time.Hour), Title: "Calibrated pruning", Abstract: "The method is an application to sequential recommendation on session logs."},
-	}, now, 7, DefaultRules(), nil)
+	}, Window{After: now.Add(-72 * time.Hour), Through: now}, DefaultRules(), nil)
 	want := []string{"old-title", "new-abstract", "abstract-recsys"}
 	if len(got) != len(want) {
 		t.Fatalf("Select() returned %d papers, want %d: %#v", len(got), len(want), got)

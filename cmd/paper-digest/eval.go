@@ -20,12 +20,12 @@ import (
 	"github.com/shichao-wang/paper-digest/internal/state"
 )
 
-const evalUsage = "用法: paper-digest eval --date YYYY-MM-DD [--to YYYY-MM-DD] [--rules candidate.json] [--input papers.json] [--json]\n      paper-digest eval rules [--topic id]\n      paper-digest eval label --id <arxiv id> --label relevant|not-relevant|clear [--input papers.json]\n      paper-digest eval fixtures"
+const evalUsage = "用法: paper-digest eval --date YYYY-MM-DD [--to YYYY-MM-DD] [--rules candidate.json] [--input papers.json] [--json]\n      --date 和 --to 是北京时间日报日期，含首尾，最多 14 天。每一天只预览对应的一个 arXiv 公告日；周日和周一没有新公告。\n      paper-digest eval rules [--topic id]\n      paper-digest eval label --id <arxiv id> --label relevant|not-relevant|clear [--input papers.json]\n      paper-digest eval fixtures"
 
-var fetchEvalPapers = func(ctx context.Context, since time.Time, searchQuery string) ([]papers.Paper, error) {
+var fetchEvalPapers = func(ctx context.Context, window papers.Window, searchQuery string) ([]papers.Paper, error) {
 	fetchCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 	defer cancel()
-	return papers.FetchSince(fetchCtx, &http.Client{Timeout: 45 * time.Second}, "", since, searchQuery)
+	return papers.FetchWindow(fetchCtx, &http.Client{Timeout: 45 * time.Second}, "", window, searchQuery)
 }
 
 func runEval(ctx context.Context, cfg config.Config, args []string) error {
@@ -80,18 +80,19 @@ func runEvalPreview(ctx context.Context, cfg config.Config, args []string) error
 			return err
 		}
 	} else {
-		cutoff, err := eval.Cutoff(dates[0])
+		window, ok, err := papers.Cover(dates)
 		if err != nil {
 			return err
 		}
-		since := cutoff.Add(-time.Duration(cfg.Arxiv.LookbackDays) * 24 * time.Hour)
-		query := active.Query
-		if draft != nil {
-			query = papers.OrQuery(active.Query, draft.Query)
-		}
-		fetched, err = fetchEvalPapers(ctx, since, query)
-		if err != nil {
-			return err
+		if ok {
+			query := active.Query
+			if draft != nil {
+				query = papers.OrQuery(active.Query, draft.Query)
+			}
+			fetched, err = fetchEvalPapers(ctx, window, query)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	store, err := openEvalStore(cfg)
@@ -103,7 +104,7 @@ func runEvalPreview(ctx context.Context, cfg config.Config, args []string) error
 	if err != nil {
 		return err
 	}
-	report, err := eval.Build(topic, dates, cfg.Arxiv.LookbackDays, active, draft, fetched, sent, labels)
+	report, err := eval.Build(topic, dates, active, draft, fetched, sent, labels)
 	if err != nil {
 		return err
 	}

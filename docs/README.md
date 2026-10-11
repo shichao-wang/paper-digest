@@ -4,7 +4,7 @@
 
 | 文档 | 职责 |
 | --- | --- |
-| [configuration.md](configuration.md) | JSON 字段、实际配置与示例、主题、模型网关、Webhook 和旧配置迁移 |
+| [configuration.md](configuration.md) | JSON 字段、实际配置与示例、主题、模型网关、Webhook，以及删除 `arxiv.lookback_days` 的迁移 |
 | [development.md](development.md) | 环境、构建、双终端开发、离线演示和 CLI |
 | [operations.md](operations.md) | Compose 部署、更新、试发、调度状态、备份与故障定位 |
 | [architecture.md](architecture.md) | 数据流、接口边界、目录职责及兼容限制 |

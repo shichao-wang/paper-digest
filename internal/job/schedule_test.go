@@ -23,8 +23,8 @@ func TestServeWaitsForBackgroundWorkAndDeliveryOutcome(t *testing.T) {
 			defer cancel()
 			entered, canceled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
 			if kind == "generate" {
-				r.Now = func() time.Time { return time.Date(2099, 9, 27, 8, 1, 0, 0, beijing()) }
-				r.Fetch = func(ctx context.Context) ([]papers.Paper, error) {
+				r.Now = func() time.Time { return time.Date(2099, 9, 26, 8, 1, 0, 0, beijing()) }
+				r.Fetch = func(ctx context.Context, _ papers.Batch) ([]papers.Paper, error) {
 					close(entered)
 					<-ctx.Done()
 					close(canceled)

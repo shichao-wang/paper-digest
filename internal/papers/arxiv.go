@@ -23,11 +23,13 @@ const legacyRASSearchQuery = `(cat:cs.IR OR ti:recommender OR ti:recommendation 
 
 var (
 	arxivPageSize = 100
-	// arxivMaxPages is a runaway guard, not a product cap. Paging stops when the
-	// lookback window is exhausted. A full page that is still inside the window
-	// after this many requests is an error, so the digest does not silently
-	// drop the rest. The delay between pages is arXiv's requested spacing.
-	arxivMaxPages  = 24
+	// arxivMaxPages is a runaway guard for one announcement day, not a product
+	// cap. The longest regular batch is Friday 14:00 ET through Monday 14:00.
+	// Paging stops when that submission window is exhausted. A full page that
+	// is still inside the window after this many requests is an error, so the
+	// digest does not silently drop the rest. The delay between pages is
+	// arXiv's requested spacing.
+	arxivMaxPages  = 5
 	arxivPageDelay = 3 * time.Second
 )
 
@@ -76,19 +78,23 @@ func Fetch(ctx context.Context, client *http.Client, baseURL string, limit int) 
 	return fetchPage(ctx, client, baseURL, 0, limit, DefaultRules().Query)
 }
 
-// FetchSince pages searchQuery newest first until the lookback window is
-// exhausted. since is the start of that window. An empty query is rejected.
-// The page count is only a safety stop: hitting it while results are still
-// inside the window returns an error instead of a shortened list.
-func FetchSince(ctx context.Context, client *http.Client, baseURL string, since time.Time, searchQuery string) ([]Paper, error) {
+// FetchWindow pages searchQuery newest first until one submission window is
+// exhausted. The query is restricted to that window's submittedDate minutes.
+// An empty query is rejected. The page count is only a safety stop: hitting
+// it while results are still inside the window returns an error instead of a
+// shortened list. A replacement's updated time does not keep it in this batch;
+// paging follows the original published timestamp.
+func FetchWindow(ctx context.Context, client *http.Client, baseURL string, window Window, searchQuery string) ([]Paper, error) {
 	if strings.TrimSpace(searchQuery) == "" {
 		return nil, fmt.Errorf("arXiv search query is required")
 	}
+	clause, err := window.submittedDateClause()
+	if err != nil {
+		return nil, err
+	}
+	searchQuery = "(" + strings.TrimSpace(searchQuery) + ") AND " + clause
 	if client == nil {
 		client = http.DefaultClient
-	}
-	if since.IsZero() {
-		return fetchPage(ctx, client, baseURL, 0, arxivPageSize, searchQuery)
 	}
 	var all []Paper
 	for page := 0; page < arxivMaxPages; page++ {
@@ -109,19 +115,20 @@ func FetchSince(ctx context.Context, client *http.Client, baseURL string, since 
 			return all, nil
 		}
 		all = append(all, batch...)
-		if len(batch) < arxivPageSize || !submittedInWindow(batch[len(batch)-1], since) {
+		if len(batch) < arxivPageSize || submissionBeforeWindow(batch[len(batch)-1], window) {
 			return all, nil
 		}
 	}
-	return nil, fmt.Errorf("arXiv lookback still had results after %d pages; refusing to drop the rest of the window", arxivMaxPages)
+	return nil, fmt.Errorf("arXiv announcement still had results after %d pages; refusing to drop the rest of the day", arxivMaxPages)
 }
 
-func submittedInWindow(paper Paper, since time.Time) bool {
-	updated := paper.Updated
-	if updated.IsZero() {
-		updated = paper.Published
+func submissionBeforeWindow(paper Paper, window Window) bool {
+	if paper.Published.IsZero() {
+		return true
 	}
-	return !updated.Before(since) || !paper.Published.Before(since)
+	minute := paper.Published.UTC().Truncate(time.Minute)
+	start := window.After.UTC().Truncate(time.Minute).Add(time.Minute)
+	return minute.Before(start)
 }
 
 func fetchPage(ctx context.Context, client *http.Client, baseURL string, start, limit int, searchQuery string) ([]Paper, error) {

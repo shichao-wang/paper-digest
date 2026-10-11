@@ -197,14 +197,13 @@ func defaultWorker(cfg config.Config, store *state.Store) (worker, error) {
 	}
 	return &job.Runner{
 		Store: store,
-		Fetch: func(ctx context.Context) ([]papers.Paper, error) {
-			since := time.Now().Add(-time.Duration(cfg.Arxiv.LookbackDays) * 24 * time.Hour)
+		Fetch: func(ctx context.Context, batch papers.Batch) ([]papers.Paper, error) {
 			fetchCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 			defer cancel()
-			return papers.FetchSince(fetchCtx, &http.Client{Timeout: 45 * time.Second}, "", since, rules.Query)
+			return papers.FetchWindow(fetchCtx, &http.Client{Timeout: 45 * time.Second}, "", batch.Window, rules.Query)
 		},
 		Analyzer: digest.ClaudeAnalyzer{Model: model, APIKey: cfg.Anthropic.APIKey, BaseURL: cfg.Anthropic.BaseURL},
-		Sender:   delivery.StoredFeishu{Store: store, Topic: job.Topic}, LookbackDays: cfg.Arxiv.LookbackDays, Now: time.Now,
+		Sender:   delivery.StoredFeishu{Store: store, Topic: job.Topic}, Now: time.Now,
 		Rules: rules,
 	}, nil
 }
@@ -268,11 +267,10 @@ func serve(parent context.Context, cfg config.Config, options serveOptions, deps
 	handler, err := web.New(store, staticFS, web.Options{
 		DeliveryEnabled: cfg.Delivery.Enabled,
 		Topics:          cfg.Topics,
-		LookbackDays:    cfg.Arxiv.LookbackDays,
 		Rules:           selectionRules(cfg),
 		Selections:      selectionSpecs(cfg),
-		Fetch: func(ctx context.Context, since time.Time, searchQuery string) ([]papers.Paper, error) {
-			return papers.FetchSince(ctx, &http.Client{Timeout: 45 * time.Second}, "", since, searchQuery)
+		Fetch: func(ctx context.Context, window papers.Window, searchQuery string) ([]papers.Paper, error) {
+			return papers.FetchWindow(ctx, &http.Client{Timeout: 45 * time.Second}, "", window, searchQuery)
 		},
 	})
 	if err != nil {

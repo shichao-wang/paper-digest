@@ -29,8 +29,12 @@ func TestEvalPreviewAndLabelsDoNotMutateTheDigest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	strong := papers.Paper{ID: "arxiv:strong", Title: "Sequential Recommendation", Published: cutoff.Add(-48 * time.Hour), Categories: []string{"cs.IR"}, URL: "https://arxiv.org/abs/strong"}
-	weak := papers.Paper{ID: "arxiv:weak", Title: "Cross community", Abstract: "social", Published: cutoff.Add(-time.Hour), Categories: []string{"cs.IR"}, URL: "https://arxiv.org/abs/weak"}
+	batch, ok, err := papers.DigestBatch("2026-10-09")
+	if err != nil || !ok {
+		t.Fatalf("batch ok=%v err=%v", ok, err)
+	}
+	strong := papers.Paper{ID: "arxiv:strong", Title: "Sequential Recommendation", Published: batch.Window.Through.Add(-2 * time.Hour), Categories: []string{"cs.IR"}, URL: "https://arxiv.org/abs/strong"}
+	weak := papers.Paper{ID: "arxiv:weak", Title: "Cross community", Abstract: "social", Published: batch.Window.Through.Add(-time.Hour), Categories: []string{"cs.IR"}, URL: "https://arxiv.org/abs/weak"}
 	if _, err := store.ClaimDay(ctx, job.Topic, "2026-09-29"); err != nil {
 		t.Fatal(err)
 	}
@@ -46,13 +50,12 @@ func TestEvalPreviewAndLabelsDoNotMutateTheDigest(t *testing.T) {
 	}
 
 	calls := 0
-	var gotSince time.Time
+	var gotWindow papers.Window
 	handler, err := New(store, fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("fixture")}}, Options{
-		Topics:       []config.Topic{{ID: job.Topic}, {ID: "another"}},
-		LookbackDays: 0,
-		Fetch: func(_ context.Context, since time.Time, _ string) ([]papers.Paper, error) {
+		Topics: []config.Topic{{ID: job.Topic}, {ID: "another"}},
+		Fetch: func(_ context.Context, window papers.Window, _ string) ([]papers.Paper, error) {
 			calls++
-			gotSince = since
+			gotWindow = window
 			return []papers.Paper{weak, strong, {ID: "arxiv:plain", Title: "Unrelated physics", Published: cutoff.Add(-30 * time.Minute)}}, nil
 		},
 	})
@@ -74,8 +77,8 @@ func TestEvalPreviewAndLabelsDoNotMutateTheDigest(t *testing.T) {
 	}
 
 	preview := request(handler, http.MethodGet, "/api/eval?date=2026-10-09", "")
-	if preview.Code != http.StatusOK || calls != 1 || !gotSince.Equal(cutoff.Add(-7*24*time.Hour)) {
-		t.Fatalf("preview=%d calls=%d since=%s body=%s", preview.Code, calls, gotSince, preview.Body.String())
+	if preview.Code != http.StatusOK || calls != 1 || !gotWindow.After.Equal(batch.Window.After) || !gotWindow.Through.Equal(batch.Window.Through) {
+		t.Fatalf("preview=%d calls=%d window=%s..%s body=%s", preview.Code, calls, gotWindow.After, gotWindow.Through, preview.Body.String())
 	}
 	var report eval.Report
 	if err := json.Unmarshal(preview.Body.Bytes(), &report); err != nil {
@@ -158,19 +161,18 @@ func TestEvalDraftDoesNotChangeLiveRulesOrDigest(t *testing.T) {
 	}
 	t.Cleanup(func() { store.Close() })
 	ctx := context.Background()
-	cutoff, err := eval.Cutoff("2026-10-09")
-	if err != nil {
-		t.Fatal(err)
+	batch, ok, err := papers.DigestBatch("2026-10-09")
+	if err != nil || !ok {
+		t.Fatalf("batch ok=%v err=%v", ok, err)
 	}
-	strong := papers.Paper{ID: "arxiv:strong", Title: "Sequential Recommendation", Published: cutoff.Add(-48 * time.Hour), Categories: []string{"cs.IR"}}
+	strong := papers.Paper{ID: "arxiv:strong", Title: "Sequential Recommendation", Published: batch.Window.Through.Add(-time.Hour), Categories: []string{"cs.IR"}}
 	if _, err := store.ClaimDay(ctx, job.Topic, "2026-10-09"); err != nil {
 		t.Fatal(err)
 	}
 	queries := []string{}
 	handler, err := New(store, fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("fixture")}}, Options{
-		Topics:       []config.Topic{{ID: job.Topic}},
-		LookbackDays: 7,
-		Fetch: func(_ context.Context, _ time.Time, query string) ([]papers.Paper, error) {
+		Topics: []config.Topic{{ID: job.Topic}},
+		Fetch: func(_ context.Context, _ papers.Window, query string) ([]papers.Paper, error) {
 			queries = append(queries, query)
 			return []papers.Paper{strong}, nil
 		},

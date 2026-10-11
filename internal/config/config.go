@@ -39,10 +39,12 @@ type Config struct {
 		Model   string `json:"model"`
 		BaseURL string `json:"base_url"`
 	} `json:"anthropic"`
-	Arxiv struct {
-		LookbackDays int `json:"lookback_days"`
-	} `json:"arxiv"`
 	Topics []Topic `json:"topics"`
+}
+
+func removedArxivField(err error) bool {
+	message := err.Error()
+	return strings.Contains(message, `unknown field "lookback_days"`) || strings.Contains(message, `unknown field "arxiv"`)
 }
 
 func Load(path string) (Config, error) {
@@ -54,6 +56,9 @@ func Load(path string) (Config, error) {
 	decoder.DisallowUnknownFields()
 	var cfg Config
 	if err := decoder.Decode(&cfg); err != nil {
+		if removedArxivField(err) {
+			return Config{}, errors.New("arxiv.lookback_days 已删除，日报改为每个北京时间日期只采集一个 arXiv 公告日。请从配置中去掉 lookback_days；如果 arxiv 段因此没有其他字段，把整个 arxiv 段删掉，保存后执行 docker compose up -d --force-recreate paper-digest")
+		}
 		return Config{}, errors.New("解析配置失败：JSON 格式或字段不合法")
 	}
 	if err := decoder.Decode(new(any)); err != io.EOF {
@@ -78,9 +83,6 @@ func Load(path string) (Config, error) {
 			return Config{}, errors.New("anthropic.base_url 必须是有效的 HTTP 或 HTTPS 服务地址，不能包含凭据、查询参数或片段")
 		}
 		cfg.Anthropic.BaseURL = baseURL
-	}
-	if cfg.Arxiv.LookbackDays < 1 || cfg.Arxiv.LookbackDays > 30 {
-		return Config{}, errors.New("arxiv.lookback_days 必须为 1 到 30")
 	}
 	for i := range cfg.Topics {
 		topic := &cfg.Topics[i]

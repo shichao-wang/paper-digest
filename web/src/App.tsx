@@ -156,7 +156,7 @@ export default function App() {
     </aside>
     <main id="main-content">
       {settingsView && <button className="back-to-management" onClick={manageTopics}>‹ 返回主题管理</button>}
-      <div className="page-heading"><div>{!adminView && <p className="eyebrow">{evalView ? '筛选评估' : historyView ? '日报历史' : '论文库'}</p>}<h2>{managementView ? '主题管理' : settingsView ? '推送配置' : topic?.name || '论文阅读'}</h2><p>{managementView ? '集中查看各主题的推送配置与自动任务状态。' : settingsView ? topic?.name || '选择一个主题以编辑推送配置。' : evalView ? '预览某一天收集到的论文，并标出推送上限内会发出的那些。' : historyView ? '按日期回看当前主题的精选论文与日报。' : '阅读当前主题的每日精选，按最近入选日期排列。'}</p></div><span className="local-label"><span aria-hidden="true" />{adminView ? '本机配置' : evalView ? '本机评估' : '本机阅读'}</span></div>
+      <div className="page-heading"><div>{!adminView && <p className="eyebrow">{evalView ? '筛选评估' : historyView ? '日报历史' : '论文库'}</p>}<h2>{managementView ? '主题管理' : settingsView ? '推送配置' : topic?.name || '论文阅读'}</h2><p>{managementView ? '集中查看各主题的推送配置与自动任务状态。' : settingsView ? topic?.name || '选择一个主题以编辑推送配置。' : evalView ? '预览某个北京时间日期对应的那一个 arXiv 公告日，并标出推送上限内会发出的那些。' : historyView ? '按日期回看当前主题的精选论文与日报。' : '阅读当前主题的每日精选，按最近入选日期排列。'}</p></div><span className="local-label"><span aria-hidden="true" />{adminView ? '本机配置' : evalView ? '本机评估' : '本机阅读'}</span></div>
       {topics.loading && <Message title="正在加载主题…" />}
       {topics.error && <Message title="无法加载主题" retry={topics.retry}>{topics.error}</Message>}
       {topics.data && managementView && <TopicManagement topics={topics.data.items} onEdit={editTopic} onRead={selectTopic} />}

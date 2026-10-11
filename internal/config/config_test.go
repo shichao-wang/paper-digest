@@ -22,7 +22,7 @@ func loadFixture(t *testing.T, text string) (Config, error) {
 }
 
 func TestModelGatewayConfig(t *testing.T) {
-	cfg, err := loadFixture(t, `{"anthropic":{"base_url":" http://host.docker.internal:3425 ","model":"group/deepseek-v4-1-flash"},"arxiv":{"lookback_days":7},"topics":[{"id":"recommendation-advertising-search"}]}`)
+	cfg, err := loadFixture(t, `{"anthropic":{"base_url":" http://host.docker.internal:3425 ","model":"group/deepseek-v4-1-flash"},"topics":[{"id":"recommendation-advertising-search"}]}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +30,7 @@ func TestModelGatewayConfig(t *testing.T) {
 		t.Fatal("未保留模型网关配置")
 	}
 	for _, value := range []string{"ftp://example.com/secret", "http:///secret", "https://user:secret@example.com", "https://example.com?key=secret", "https://example.com#secret"} {
-		_, err := loadFixture(t, `{"anthropic":{"base_url":"`+value+`"},"arxiv":{"lookback_days":7},"topics":[{"id":"recommendation-advertising-search"}]}`)
+		_, err := loadFixture(t, `{"anthropic":{"base_url":"`+value+`"},"topics":[{"id":"recommendation-advertising-search"}]}`)
 		if err == nil || strings.Contains(err.Error(), "secret") {
 			t.Fatalf("应拒绝无效网关地址且不泄漏凭据: %v", err)
 		}
@@ -38,7 +38,7 @@ func TestModelGatewayConfig(t *testing.T) {
 }
 
 func TestWebhookSelectsDistinctRobots(t *testing.T) {
-	cfg, err := loadFixture(t, `{"arxiv":{"lookback_days":7},"topics":[{"id":"recommendation-advertising-search","webhook_url":"https://example.com/ras"},{"id":"new-topic","webhook_url":"https://example.com/new"}]}`)
+	cfg, err := loadFixture(t, `{"topics":[{"id":"recommendation-advertising-search","webhook_url":"https://example.com/ras"},{"id":"new-topic","webhook_url":"https://example.com/new"}]}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,12 +57,12 @@ func TestWebhookSelectsDistinctRobots(t *testing.T) {
 
 func TestInvalidConfigsDoNotEchoSecrets(t *testing.T) {
 	for name, text := range map[string]string{
-		"empty":           `{"arxiv":{"lookback_days":7},"topics":[]}`,
-		"missing-id":      `{"arxiv":{"lookback_days":7},"topics":[{"webhook_url":"https://example.com/secret"}]}`,
-		"invalid-id":      `{"arxiv":{"lookback_days":7},"topics":[{"id":"UPPER","webhook_url":"https://example.com/secret"}]}`,
-		"duplicate-topic": `{"arxiv":{"lookback_days":7},"topics":[{"id":"new-topic"},{"id":"new-topic"}]}`,
-		"unknown-field":   `{"arxiv":{"lookback_days":7},"topics":[{"id":"new-topic","https://example.com/secret":"value"}]}`,
-		"trailing":        `{"arxiv":{"lookback_days":7},"topics":[{"id":"new-topic"}]} {}`,
+		"empty":           `{"topics":[]}`,
+		"missing-id":      `{"topics":[{"webhook_url":"https://example.com/secret"}]}`,
+		"invalid-id":      `{"topics":[{"id":"UPPER","webhook_url":"https://example.com/secret"}]}`,
+		"duplicate-topic": `{"topics":[{"id":"new-topic"},{"id":"new-topic"}]}`,
+		"unknown-field":   `{"topics":[{"id":"new-topic","https://example.com/secret":"value"}]}`,
+		"trailing":        `{"topics":[{"id":"new-topic"}]} {}`,
 		"lookback-zero":   `{"arxiv":{"lookback_days":0},"topics":[{"id":"new-topic"}]}`,
 		"lookback-large":  `{"arxiv":{"lookback_days":31},"topics":[{"id":"new-topic"}]}`,
 		"invalid-type":    `{"arxiv":{"lookback_days":"secret"},"topics":[{"id":"new-topic"}]}`,
@@ -73,6 +73,27 @@ func TestInvalidConfigsDoNotEchoSecrets(t *testing.T) {
 				t.Fatalf("应拒绝配置且不泄漏凭据: %v", err)
 			}
 		})
+	}
+}
+
+func TestRemovedLookbackDaysExplainsTheMigration(t *testing.T) {
+	for _, text := range []string{
+		`{"arxiv":{"lookback_days":7},"topics":[{"id":"new-topic"}]}`,
+		`{"arxiv":{},"topics":[{"id":"new-topic"}]}`,
+		`{"topics":[{"id":"new-topic","lookback_days":7}]}`,
+	} {
+		_, err := loadFixture(t, text)
+		if err == nil || !strings.Contains(err.Error(), "arxiv.lookback_days 已删除") || !strings.Contains(err.Error(), "docker compose up -d --force-recreate paper-digest") || strings.Contains(err.Error(), "lookback_days\":7") {
+			t.Fatalf("migration error = %v", err)
+		}
+	}
+	cfg, err := loadFixture(t, `{"topics":[{"id":"recommendation-advertising-search"}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rules, _, ok := cfg.TopicSelection("recommendation-advertising-search")
+	if !ok || !rules.Active() {
+		t.Fatal("config without an arxiv section did not load the built-in rules")
 	}
 }
 
@@ -97,7 +118,7 @@ func TestDeliveryRequiresConfiguredTopicIdentity(t *testing.T) {
 		{"correct-topic-among-others", `[{"id":"another"},{"id":"recommendation-advertising-search"}]`, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg, err := loadFixture(t, `{"delivery":{"enabled":true},"anthropic":{"api_key":"private-secret"},"arxiv":{"lookback_days":7},"topics":`+tc.topics+`}`)
+			cfg, err := loadFixture(t, `{"delivery":{"enabled":true},"anthropic":{"api_key":"private-secret"},"topics":`+tc.topics+`}`)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -110,7 +131,7 @@ func TestDeliveryRequiresConfiguredTopicIdentity(t *testing.T) {
 }
 
 func TestDeliveryRequiresFileCredentialsOnlyWhenEnabled(t *testing.T) {
-	cfg, err := loadFixture(t, `{"arxiv":{"lookback_days":7},"topics":[{"id":"recommendation-advertising-search","webhook_url":""}]}`)
+	cfg, err := loadFixture(t, `{"topics":[{"id":"recommendation-advertising-search","webhook_url":""}]}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +151,7 @@ func TestDeliveryRequiresFileCredentialsOnlyWhenEnabled(t *testing.T) {
 }
 
 func TestOmittedSelectionUsesBuiltinRules(t *testing.T) {
-	cfg, err := loadFixture(t, `{"arxiv":{"lookback_days":7},"topics":[{"id":"recommendation-advertising-search"},{"id":"another"}]}`)
+	cfg, err := loadFixture(t, `{"topics":[{"id":"recommendation-advertising-search"},{"id":"another"}]}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,12 +175,12 @@ func TestOmittedSelectionUsesBuiltinRules(t *testing.T) {
 
 func TestSelectionRulesAreValidatedWithoutEchoingThePattern(t *testing.T) {
 	secret := "super-secret-pattern"
-	text := `{"arxiv":{"lookback_days":7},"topics":[{"id":"another","selection":{"max_papers":5,"min_tier":1,"query":{"categories":["cs.IR"]},"signals":[{"name":"title:hit","pattern":"(` + secret + `","fields":["title"],"tier":2}],"decisions":[{"tier":2,"reason":"title match","min_signal_tier":2}],"fallback_reason":"none"}}]}`
+	text := `{"topics":[{"id":"another","selection":{"max_papers":5,"min_tier":1,"query":{"categories":["cs.IR"]},"signals":[{"name":"title:hit","pattern":"(` + secret + `","fields":["title"],"tier":2}],"decisions":[{"tier":2,"reason":"title match","min_signal_tier":2}],"fallback_reason":"none"}}]}`
 	_, err := loadFixture(t, text)
 	if err == nil || !strings.Contains(err.Error(), "筛选规则无效") || !strings.Contains(err.Error(), "正则") || strings.Contains(err.Error(), secret) {
 		t.Fatalf("err = %v", err)
 	}
-	unknown := `{"arxiv":{"lookback_days":7},"topics":[{"id":"recommendation-advertising-search","selection":{"max_papers":5,"min_tier":1,"query":{"categories":["cs.IR"]},"signals":[],"decisions":[],"fallback_reason":"none","` + secret + `":1}}]}`
+	unknown := `{"topics":[{"id":"recommendation-advertising-search","selection":{"max_papers":5,"min_tier":1,"query":{"categories":["cs.IR"]},"signals":[],"decisions":[],"fallback_reason":"none","` + secret + `":1}}]}`
 	_, err = loadFixture(t, unknown)
 	if err == nil || strings.Contains(err.Error(), secret) {
 		t.Fatalf("unknown field err = %v", err)

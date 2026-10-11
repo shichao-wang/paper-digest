@@ -16,8 +16,8 @@ import (
 	"github.com/shichao-wang/paper-digest/internal/state"
 )
 
-func defaultEvalFetch(ctx context.Context, since time.Time, searchQuery string) ([]papers.Paper, error) {
-	return papers.FetchSince(ctx, &http.Client{Timeout: 45 * time.Second}, "", since, searchQuery)
+func defaultEvalFetch(ctx context.Context, window papers.Window, searchQuery string) ([]papers.Paper, error) {
+	return papers.FetchWindow(ctx, &http.Client{Timeout: 45 * time.Second}, "", window, searchQuery)
 }
 
 func (s *server) evalAPI(w http.ResponseWriter, r *http.Request) {
@@ -92,7 +92,7 @@ func (s *server) evalPreview(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
 	defer cancel()
-	cutoff, err := eval.Cutoff(dates[0])
+	window, hasWindow, err := papers.Cover(dates)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid query parameters")
 		return
@@ -105,18 +105,20 @@ func (s *server) evalPreview(w http.ResponseWriter, r *http.Request) {
 	if draft != nil {
 		query = papers.OrQuery(active.Query, draft.Query)
 	}
-	since := cutoff.Add(-time.Duration(s.lookbackDays) * 24 * time.Hour)
-	fetched, err := fetch(ctx, since, query)
-	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, "service unavailable")
-		return
+	var fetched []papers.Paper
+	if hasWindow {
+		fetched, err = fetch(ctx, window, query)
+		if err != nil {
+			writeError(w, http.StatusServiceUnavailable, "service unavailable")
+			return
+		}
 	}
 	labels, sent, err := s.evalContext(ctx, topic.ID, dates)
 	if err != nil {
 		writeStatus(w, err)
 		return
 	}
-	report, err := eval.Build(topic.ID, dates, s.lookbackDays, active, draft, fetched, sent, labels)
+	report, err := eval.Build(topic.ID, dates, active, draft, fetched, sent, labels)
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, "service unavailable")
 		return

@@ -50,7 +50,6 @@ func serveConfig(path string, enabled bool) config.Config {
 	var cfg config.Config
 	cfg.Database.Path = path
 	cfg.Delivery.Enabled = enabled
-	cfg.Arxiv.LookbackDays = 7
 	cfg.Anthropic.APIKey = "fixture-key"
 	cfg.Topics = []config.Topic{{ID: job.Topic, WebhookURL: "https://example.invalid/fixture"}}
 	return cfg

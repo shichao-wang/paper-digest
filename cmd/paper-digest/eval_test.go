@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/shichao-wang/paper-digest/internal/job"
 	"github.com/shichao-wang/paper-digest/internal/papers"
@@ -20,7 +19,7 @@ import (
 func TestEvalPreviewLabelsAndFixturesDoNotTouchDigestState(t *testing.T) {
 	originalFetch := fetchEvalPapers
 	t.Cleanup(func() { fetchEvalPapers = originalFetch })
-	fetchEvalPapers = func(context.Context, time.Time, string) ([]papers.Paper, error) {
+	fetchEvalPapers = func(context.Context, papers.Window, string) ([]papers.Paper, error) {
 		t.Fatal("offline preview fetched arXiv")
 		return nil, nil
 	}
@@ -154,7 +153,7 @@ func TestEvalDraftRulesDoNotRewriteConfigOrCreateJobs(t *testing.T) {
 	dir := t.TempDir()
 	database := filepath.Join(dir, "digest.db")
 	configPath := filepath.Join(dir, "config.json")
-	configBody := `{"database":{"path":"` + database + `"},"arxiv":{"lookback_days":7},"topics":[{"id":"recommendation-advertising-search"}]}`
+	configBody := `{"database":{"path":"` + database + `"},"topics":[{"id":"recommendation-advertising-search"}]}`
 	if err := os.WriteFile(configPath, []byte(configBody), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +195,7 @@ func TestEvalDraftRulesDoNotRewriteConfigOrCreateJobs(t *testing.T) {
 
 	missingDB := filepath.Join(t.TempDir(), "missing.db")
 	rulesConfig := filepath.Join(t.TempDir(), "config.json")
-	if err := os.WriteFile(rulesConfig, []byte(`{"database":{"path":"`+missingDB+`"},"arxiv":{"lookback_days":7},"topics":[{"id":"recommendation-advertising-search"}]}`), 0o600); err != nil {
+	if err := os.WriteFile(rulesConfig, []byte(`{"database":{"path":"`+missingDB+`"},"topics":[{"id":"recommendation-advertising-search"}]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	printed, err := captureStdout(t, func() error {

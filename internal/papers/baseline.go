@@ -4,25 +4,23 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"time"
 )
 
 // SelectLoose is the selection rule used before relevance tiers. It is frozen
 // so a rule change can be compared with that baseline. It is not used for the
 // daily digest.
-func SelectLoose(all []Paper, now time.Time, lookbackDays, max int, seen func(string) bool) []Paper {
-	if lookbackDays <= 0 || max <= 0 {
+func SelectLoose(all []Paper, window Window, max int, seen func(string) bool) []Paper {
+	if !window.Valid() || max <= 0 {
 		return nil
 	}
 	if max > maxDailyPapers {
 		max = maxDailyPapers
 	}
-	cutoff := now.Add(-time.Duration(lookbackDays) * 24 * time.Hour)
 	candidateByID := make(map[string]Paper, len(all))
 	seenState := make(map[string]bool, len(all))
 	checkedSeen := make(map[string]bool, len(all))
 	for _, paper := range all {
-		if paper.ID == "" || paper.Published.IsZero() || paper.Published.Before(cutoff) || paper.Published.After(now) {
+		if paper.ID == "" || !window.Contains(paper.Published) {
 			continue
 		}
 		if !looseTopic(paper) {

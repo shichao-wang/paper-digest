@@ -44,7 +44,10 @@ interface EvalScore {
 
 interface EvalDay {
   date: string
-  lookbackDays: number
+  hasBatch: boolean
+  announcement?: string
+  submittedAfter?: string
+  submittedThrough?: string
   selected: EvalCandidate[]
   pushed: EvalCandidate[]
   pushLimit: number
@@ -239,7 +242,7 @@ export default function EvalReview({ topicID }: { topicID: string }) {
   }
 
   return <div className="eval-review">
-    <p className="eval-note">按当天北京时间 09:00 的截止时刻收集窗口内全部合格论文，并标出每日推送上限内会生成摘要、发到飞书的那些。不生成摘要，不发送飞书，不把论文标为已读，也不写入日报任务。草稿只用于这次对照，不会改 config.json。打开本页不会自动抓取。</p>
+    <p className="eval-note">开始日期和结束日期都是北京时间的日报日期，含首尾。每一天只收集对应的一个 arXiv 公告日，并标出每日推送上限内会生成摘要、发到飞书的那些。周日和周一没有新公告，预览为空，不会改看上一批。不生成摘要，不发送飞书，不把论文标为已读，也不写入日报任务。草稿只用于这次对照，不会改 config.json。打开本页不会自动抓取。</p>
     <div className="rules-editor">
       <label className="filter-field"><span>筛选规则 JSON</span><textarea value={rulesText} spellCheck={false} onChange={event => setRulesText(event.target.value)} aria-label="筛选规则 JSON" /></label>
       <div className="rules-actions">
@@ -258,7 +261,7 @@ export default function EvalReview({ topicID }: { topicID: string }) {
     {labelError && <p className="row-error" role="status">{labelError}</p>}
     {report?.days.map(day => <section key={day.date} className="eval-day">
       <div className="eval-score">
-        <strong>{day.date}</strong> 回看 {day.lookbackDays} 天。收集 {day.selected.length} 篇，将推送 {day.pushed.length} 篇（上限 {day.pushLimit}），宽松基线 {day.loose.length} 篇，当日已保存 {day.sent.length} 篇。
+        <strong>{day.date}</strong>{day.hasBatch ? ` 对应 arXiv 公告日 ${day.announcement}（美东）。` : ' 没有新的 arXiv 公告，不重复采集上一批。'}收集 {day.selected.length} 篇，将推送 {day.pushed.length} 篇（上限 {day.pushLimit}），宽松基线 {day.loose.length} 篇，当日已保存 {day.sent.length} 篇。
         {day.score.labeled === 0 ? ' 已标注将推送 0 篇，精确率暂无。' : ` 已标注将推送 ${day.score.labeled} 篇，其中相关 ${day.score.relevant}、不相关 ${day.score.notRelevant}，精确率 ${day.score.precision?.toFixed(2)}。`}
         {day.draft ? (day.draft.score.labeled === 0 ? ` 草稿收集 ${day.draft.selected.length} 篇，将推送 ${day.draft.pushed.length} 篇，已标注 0 篇，精确率暂无。` : ` 草稿收集 ${day.draft.selected.length} 篇，将推送 ${day.draft.pushed.length} 篇，已标注 ${day.draft.score.labeled} 篇，其中相关 ${day.draft.score.relevant}、不相关 ${day.draft.score.notRelevant}，精确率 ${day.draft.score.precision?.toFixed(2)}。`) : ''}
       </div>

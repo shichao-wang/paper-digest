@@ -10,9 +10,6 @@
     "model": "claude-opus-5",
     "base_url": ""
   },
-  "arxiv": {
-    "lookback_days": 7
-  },
   "topics": [
     {
       "id": "recommendation-advertising-search",

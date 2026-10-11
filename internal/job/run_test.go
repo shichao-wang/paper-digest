@@ -32,18 +32,21 @@ func testRunner(t *testing.T) *Runner {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	now := time.Date(2026, 9, 27, 8, 0, 0, 0, beijing())
+	now := time.Date(2026, 9, 26, 8, 0, 0, 0, beijing())
+	batch, ok, err := papers.DigestBatch("2026-09-26")
+	if err != nil || !ok {
+		t.Fatalf("batch ok=%v err=%v", ok, err)
+	}
 	return &Runner{
 		Store: store,
-		Fetch: func(context.Context) ([]papers.Paper, error) {
-			return []papers.Paper{{ID: "arxiv:2609.12345", Version: "v1", Title: "Neural Recommender Systems", Abstract: "A new recommendation and search retrieval method", Published: now.Add(-time.Hour), URL: "https://arxiv.org/abs/2609.12345v1"}}, nil
+		Fetch: func(context.Context, papers.Batch) ([]papers.Paper, error) {
+			return []papers.Paper{{ID: "arxiv:2609.12345", Version: "v1", Title: "Neural Recommender Systems", Abstract: "A new recommendation and search retrieval method", Published: batch.Window.Through.Add(-time.Hour), URL: "https://arxiv.org/abs/2609.12345v1"}}, nil
 		},
 		Analyzer: analyzerFunc(func(context.Context, papers.Paper) (digest.Summary, error) {
 			return digest.Summary{Text: "基于摘要的中文要点", Model: "fixture", PromptVersion: "test"}, nil
 		}),
-		LookbackDays: 7,
-		Now:          func() time.Time { return now },
-		Rules:        papers.DefaultRules(),
+		Now:   func() time.Time { return now },
+		Rules: papers.DefaultRules(),
 	}
 }
 
@@ -71,11 +74,15 @@ func TestGenerateSummarizesOnlyThePushSet(t *testing.T) {
 		analyzed = append(analyzed, paper.ID)
 		return digest.Summary{Text: "基于摘要的中文要点", Model: "fixture", PromptVersion: "test"}, nil
 	})
-	r.Fetch = func(context.Context) ([]papers.Paper, error) {
+	r.Fetch = func(context.Context, papers.Batch) ([]papers.Paper, error) {
+		batch, ok, err := papers.DigestBatch(BeijingDate(now))
+		if err != nil || !ok {
+			t.Fatalf("batch ok=%v err=%v", ok, err)
+		}
 		return []papers.Paper{
-			{ID: "arxiv:newest", Title: "Web Search Ranking", Published: now.Add(-time.Hour), URL: "https://arxiv.org/abs/newest"},
-			{ID: "arxiv:older", Title: "Web Search Ranking", Published: now.Add(-2 * time.Hour), URL: "https://arxiv.org/abs/older"},
-			{ID: "arxiv:oldest", Title: "Web Search Ranking", Published: now.Add(-3 * time.Hour), URL: "https://arxiv.org/abs/oldest"},
+			{ID: "arxiv:newest", Title: "Web Search Ranking", Published: batch.Window.Through.Add(-time.Hour), URL: "https://arxiv.org/abs/newest"},
+			{ID: "arxiv:older", Title: "Web Search Ranking", Published: batch.Window.Through.Add(-2 * time.Hour), URL: "https://arxiv.org/abs/older"},
+			{ID: "arxiv:oldest", Title: "Web Search Ranking", Published: batch.Window.Through.Add(-3 * time.Hour), URL: "https://arxiv.org/abs/oldest"},
 		}, nil
 	}
 	if err := r.Generate(context.Background(), BeijingDate(now)); err != nil {
@@ -177,7 +184,7 @@ func TestGenerateResumeAndDeliverOnce(t *testing.T) {
 	if err := r.Generate(ctx, date); err == nil || jobStatus(t, r, date) != "processing" {
 		t.Fatal("模型失败不能发半成品")
 	}
-	r.Fetch = func(context.Context) ([]papers.Paper, error) {
+	r.Fetch = func(context.Context, papers.Batch) ([]papers.Paper, error) {
 		t.Fatal("恢复任务不得重新抓取和改写候选")
 		return nil, nil
 	}
@@ -233,7 +240,7 @@ func TestDeliveryFailureBecomesUnknown(t *testing.T) {
 
 func TestEmptyDigestIsReady(t *testing.T) {
 	r := testRunner(t)
-	r.Fetch = func(context.Context) ([]papers.Paper, error) { return nil, nil }
+	r.Fetch = func(context.Context, papers.Batch) ([]papers.Paper, error) { return nil, nil }
 	r.Analyzer = analyzerFunc(func(context.Context, papers.Paper) (digest.Summary, error) {
 		t.Fatal("空日报不应调用模型")
 		return digest.Summary{}, nil
@@ -259,10 +266,15 @@ func TestDeliverOneMessagePerPaperAndPreserveConfirmedPartialBatch(t *testing.T)
 		r := testRunner(t)
 		ctx := context.Background()
 		date := BeijingDate(r.Now())
-		r.Fetch = func(context.Context) ([]papers.Paper, error) {
+		r.Fetch = func(context.Context, papers.Batch) ([]papers.Paper, error) {
+			batch, ok, err := papers.DigestBatch(date)
+			if err != nil || !ok {
+				t.Fatalf("batch ok=%v err=%v", ok, err)
+			}
+			published := batch.Window.Through.Add(-time.Hour)
 			return []papers.Paper{
-				{ID: "arxiv:2610.00001", Version: "v1", Title: "First Recommendation", Abstract: "recommendation", Published: r.Now().Add(-time.Hour)},
-				{ID: "arxiv:2610.00002", Version: "v1", Title: "Second Recommendation", Abstract: "recommendation", Published: r.Now().Add(-time.Hour)},
+				{ID: "arxiv:2610.00001", Version: "v1", Title: "First Recommendation", Abstract: "recommendation", Published: published},
+				{ID: "arxiv:2610.00002", Version: "v1", Title: "Second Recommendation", Abstract: "recommendation", Published: published},
 			}, nil
 		}
 		if err := r.Generate(ctx, date); err != nil {
@@ -286,7 +298,7 @@ func TestDeliverOneMessagePerPaperAndPreserveConfirmedPartialBatch(t *testing.T)
 					t.Fatalf("message %d contains wrong paper: %s", i, message)
 				}
 			}
-			if !strings.Contains(message, "2026-09-27") {
+			if !strings.Contains(message, "2026-09-26") {
 				t.Fatal("missing digest date")
 			}
 		}
@@ -312,10 +324,15 @@ func TestOversizedLaterCardRejectsWholeBatchBeforeClaim(t *testing.T) {
 	r := testRunner(t)
 	ctx := context.Background()
 	date := BeijingDate(r.Now())
-	r.Fetch = func(context.Context) ([]papers.Paper, error) {
+	r.Fetch = func(context.Context, papers.Batch) ([]papers.Paper, error) {
+		batch, ok, err := papers.DigestBatch(date)
+		if err != nil || !ok {
+			t.Fatalf("batch ok=%v err=%v", ok, err)
+		}
+		published := batch.Window.Through.Add(-time.Hour)
 		return []papers.Paper{
-			{ID: "arxiv:2610.00001", Title: "First Recommendation", Abstract: "recommendation", Published: r.Now()},
-			{ID: "arxiv:2610.00002", Title: "Second Recommendation", Abstract: "recommendation", Published: r.Now()},
+			{ID: "arxiv:2610.00001", Title: "First Recommendation", Abstract: "recommendation", Published: published},
+			{ID: "arxiv:2610.00002", Title: "Second Recommendation", Abstract: "recommendation", Published: published},
 		}, nil
 	}
 	r.Analyzer = analyzerFunc(func(_ context.Context, paper papers.Paper) (digest.Summary, error) {
@@ -352,5 +369,73 @@ func TestOversizedLaterCardRejectsWholeBatchBeforeClaim(t *testing.T) {
 		if err != nil || seen {
 			t.Fatalf("unsent paper recorded: seen=%v err=%v", seen, err)
 		}
+	}
+}
+
+func TestCatchUpCollectsEachMissingArxivDayOnce(t *testing.T) {
+	r := testRunner(t)
+	ctx := context.Background()
+	if _, err := r.Store.ClaimDay(ctx, Topic, "2026-09-23"); err != nil {
+		t.Fatal(err)
+	}
+	dates, err := r.datesToGenerate(ctx, "2026-09-26")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(dates, ",") != "2026-09-24,2026-09-25,2026-09-26" {
+		t.Fatalf("dates = %v", dates)
+	}
+	var announcements []string
+	r.Fetch = func(_ context.Context, batch papers.Batch) ([]papers.Paper, error) {
+		announcements = append(announcements, batch.Announcement)
+		return []papers.Paper{{
+			ID: "arxiv:" + batch.Announcement, Title: "Web Search Ranking",
+			Published: batch.Window.Through.Add(-time.Hour),
+		}}, nil
+	}
+	for _, date := range dates {
+		if err := r.Generate(ctx, date); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if strings.Join(announcements, ",") != "2026-09-22,2026-09-23,2026-09-24" {
+		t.Fatalf("announcements = %v", announcements)
+	}
+	announcements = nil
+	if err := r.Generate(ctx, "2026-09-26"); err != nil {
+		t.Fatal(err)
+	}
+	if len(announcements) != 0 {
+		t.Fatalf("second generate fetched again: %v", announcements)
+	}
+	sundayFetches := 0
+	r.Fetch = func(context.Context, papers.Batch) ([]papers.Paper, error) {
+		sundayFetches++
+		return []papers.Paper{{ID: "arxiv:saturday", Title: "Web Search Ranking", Published: time.Date(2026, 9, 24, 16, 0, 0, 0, time.UTC)}}, nil
+	}
+	if err := r.Generate(ctx, "2026-09-27"); err != nil {
+		t.Fatal(err)
+	}
+	if sundayFetches != 0 || jobStatus(t, r, "2026-09-27") != "ready" {
+		t.Fatalf("sunday fetches=%d status=%s", sundayFetches, jobStatus(t, r, "2026-09-27"))
+	}
+	current, err := r.Store.GetJob(ctx, Topic, "2026-09-27")
+	if err != nil || !strings.Contains(current.Message, "未发现") {
+		t.Fatalf("sunday message = %+v %v", current, err)
+	}
+}
+
+func TestCoverDatesStopsAtSevenDaysAndSkipsExistingJobs(t *testing.T) {
+	first, err := coverDates("2026-10-10", "", false)
+	if err != nil || len(first) != 1 || first[0] != "2026-10-10" {
+		t.Fatalf("first run = %v %v", first, err)
+	}
+	gap, err := coverDates("2026-10-10", "2026-09-01", true)
+	if err != nil || len(gap) != catchUpLimit || gap[0] != "2026-10-04" || gap[len(gap)-1] != "2026-10-10" {
+		t.Fatalf("capped gap = %v %v", gap, err)
+	}
+	next, err := coverDates("2026-10-10", "2026-10-10", true)
+	if err != nil || len(next) != 1 || next[0] != "2026-10-10" {
+		t.Fatalf("already current = %v %v", next, err)
 	}
 }

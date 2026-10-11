@@ -168,8 +168,9 @@ func TestFetchSinceStopsAtLookbackAndKeepsPagingAfterUpdates(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := r.URL.Query().Get("start")
 		starts = append(starts, start)
-		if !strings.Contains(r.URL.Query().Get("search_query"), "cat:cs.IR") || strings.Contains(r.URL.Query().Get("search_query"), "all:") {
-			t.Errorf("search_query = %q", r.URL.Query().Get("search_query"))
+		query := r.URL.Query().Get("search_query")
+		if !strings.Contains(query, "cat:cs.IR") || strings.Contains(query, "all:") || !strings.Contains(query, "submittedDate:[202610030001 TO 202610090000]") {
+			t.Errorf("search_query = %q", query)
 		}
 		var body string
 		switch start {
@@ -190,7 +191,8 @@ func TestFetchSinceStopsAtLookbackAndKeepsPagingAfterUpdates(t *testing.T) {
 	defer server.Close()
 
 	since := time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC)
-	got, err := FetchSince(context.Background(), server.Client(), server.URL, since, DefaultRules().Query)
+	window := Window{After: since, Through: time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC)}
+	got, err := FetchWindow(context.Background(), server.Client(), server.URL, window, DefaultRules().Query)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +213,7 @@ func TestFetchSinceStopsOnShortPageAndCancel(t *testing.T) {
 			fmt.Fprintf(w, `<feed xmlns="http://www.w3.org/2005/Atom">%s</feed>`, atomEntryXML("2401.00010", "2026-10-08T00:00:00Z", "", "Only one"))
 		}))
 		defer server.Close()
-		got, err := FetchSince(context.Background(), server.Client(), server.URL, time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), DefaultRules().Query)
+		got, err := FetchWindow(context.Background(), server.Client(), server.URL, Window{After: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), Through: time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC)}, DefaultRules().Query)
 		if err != nil || len(got) != 1 || calls != 1 {
 			t.Fatalf("got %d papers, calls %d, err %v", len(got), calls, err)
 		}
@@ -230,7 +232,7 @@ func TestFetchSinceStopsOnShortPageAndCancel(t *testing.T) {
 			fmt.Fprintf(w, `<feed xmlns="http://www.w3.org/2005/Atom">%s</feed>`, atomEntryXML("2401.00011", "2026-10-08T00:00:00Z", "", "One"))
 		}))
 		defer server.Close()
-		_, err := FetchSince(ctx, server.Client(), server.URL, time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), DefaultRules().Query)
+		_, err := FetchWindow(ctx, server.Client(), server.URL, Window{After: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), Through: time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC)}, DefaultRules().Query)
 		if err == nil || calls != 1 {
 			t.Fatalf("err = %v, calls = %d, want cancellation after the first page", err, calls)
 		}
@@ -246,7 +248,7 @@ func TestFetchSinceRefusesToTruncateAnOpenWindow(t *testing.T) {
 		fmt.Fprintf(w, `<feed xmlns="http://www.w3.org/2005/Atom">%s</feed>`, atomEntryXML(id, "2026-10-08T00:00:00Z", "", "Still inside"))
 	}))
 	defer server.Close()
-	_, err := FetchSince(context.Background(), server.Client(), server.URL, time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), DefaultRules().Query)
+	_, err := FetchWindow(context.Background(), server.Client(), server.URL, Window{After: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), Through: time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC)}, DefaultRules().Query)
 	if err == nil || !strings.Contains(err.Error(), "refusing to drop") || calls != 2 {
 		t.Fatalf("err = %v, calls = %d", err, calls)
 	}
@@ -273,7 +275,7 @@ func TestSelectFiltersAndCapsResults(t *testing.T) {
 		return id == "already-seen"
 	}
 
-	got := Select(papers, now, 7, DefaultRules(), seen)
+	got := Select(papers, Window{After: now.Add(-7 * 24 * time.Hour), Through: now}, DefaultRules(), seen)
 	if len(got) != 7 {
 		t.Fatalf("Select() returned %d papers, want all 7 qualifying papers", len(got))
 	}
@@ -303,7 +305,7 @@ func TestSelectUsesUnionOfRASTopics(t *testing.T) {
 		{ID: "advertising-only", Published: now, Title: "Online advertising auction design"},
 		{ID: "search-only", Published: now, Title: "Search engine query processing"},
 		{ID: "unrelated", Published: now, Title: "Research on molecular embeddings"},
-	}, now, 7, DefaultRules(), nil)
+	}, Window{After: now.Add(-time.Minute), Through: now}, DefaultRules(), nil)
 	if len(got) != 5 {
 		t.Fatalf("Select() returned %d papers, want 5 papers matching the RAS union", len(got))
 	}

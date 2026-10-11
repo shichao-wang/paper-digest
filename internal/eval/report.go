@@ -103,20 +103,23 @@ type Score struct {
 }
 
 type Day struct {
-	Date         string           `json:"date"`
-	Cutoff       time.Time        `json:"cutoff"`
-	LookbackDays int              `json:"lookbackDays"`
-	Selected     []Candidate      `json:"selected"`
-	Pushed       []Candidate      `json:"pushed"`
-	PushLimit    int              `json:"pushLimit"`
-	Loose        []Candidate      `json:"loose"`
-	Sent         []SentPaper      `json:"sent"`
-	Candidates   []Candidate      `json:"candidates"`
-	OnlyCurrent  []string         `json:"onlyCurrent"`
-	OnlyLoose    []string         `json:"onlyLoose"`
-	OnlySent     []string         `json:"onlySent"`
-	Score        Score            `json:"score"`
-	Draft        *DraftComparison `json:"draft,omitempty"`
+	Date             string           `json:"date"`
+	Cutoff           time.Time        `json:"cutoff"`
+	HasBatch         bool             `json:"hasBatch"`
+	Announcement     string           `json:"announcement,omitempty"`
+	SubmittedAfter   time.Time        `json:"submittedAfter,omitempty"`
+	SubmittedThrough time.Time        `json:"submittedThrough,omitempty"`
+	Selected         []Candidate      `json:"selected"`
+	Pushed           []Candidate      `json:"pushed"`
+	PushLimit        int              `json:"pushLimit"`
+	Loose            []Candidate      `json:"loose"`
+	Sent             []SentPaper      `json:"sent"`
+	Candidates       []Candidate      `json:"candidates"`
+	OnlyCurrent      []string         `json:"onlyCurrent"`
+	OnlyLoose        []string         `json:"onlyLoose"`
+	OnlySent         []string         `json:"onlySent"`
+	Score            Score            `json:"score"`
+	Draft            *DraftComparison `json:"draft,omitempty"`
 }
 
 type Report struct {
@@ -127,10 +130,7 @@ type Report struct {
 // Build previews selection for each date. It does not read or write storage.
 // labels maps paper ID to relevant or not_relevant. sent maps a date to the
 // papers recorded for that digest, in saved order.
-func Build(topic string, dates []string, lookbackDays int, active papers.Rules, draft *papers.Rules, fetched []papers.Paper, sent map[string][]SentPaper, labels map[string]string) (Report, error) {
-	if lookbackDays < 1 || lookbackDays > 30 {
-		return Report{}, fmt.Errorf("lookback must be from 1 to 30")
-	}
+func Build(topic string, dates []string, active papers.Rules, draft *papers.Rules, fetched []papers.Paper, sent map[string][]SentPaper, labels map[string]string) (Report, error) {
 	if len(dates) == 0 {
 		return Report{}, fmt.Errorf("date is required")
 	}
@@ -143,19 +143,27 @@ func Build(topic string, dates []string, lookbackDays int, active papers.Rules, 
 		if err != nil {
 			return Report{}, err
 		}
-		report.Days = append(report.Days, buildDay(date, cutoff, lookbackDays, active, draft, fetched, sent[date], labels))
+		batch, ok, err := papers.DigestBatch(date)
+		if err != nil {
+			return Report{}, err
+		}
+		report.Days = append(report.Days, buildDay(date, cutoff, batch, ok, active, draft, fetched, sent[date], labels))
 	}
 	return report, nil
 }
 
-func buildDay(date string, cutoff time.Time, lookback int, active papers.Rules, draft *papers.Rules, fetched []papers.Paper, sent []SentPaper, labels map[string]string) Day {
-	selected := papers.Select(fetched, cutoff, lookback, active, nil)
+func buildDay(date string, cutoff time.Time, batch papers.Batch, hasBatch bool, active papers.Rules, draft *papers.Rules, fetched []papers.Paper, sent []SentPaper, labels map[string]string) Day {
+	window := batch.Window
+	if !hasBatch {
+		window = papers.Window{}
+	}
+	selected := papers.Select(fetched, window, active, nil)
 	pushed := papers.ForPush(selected, active.MaxPapers())
-	loose := papers.SelectLoose(fetched, cutoff, lookback, 5, nil)
+	loose := papers.SelectLoose(fetched, window, 5, nil)
 	var drafted []papers.Paper
 	var draftPushed []papers.Paper
 	if draft != nil {
-		drafted = papers.Select(fetched, cutoff, lookback, *draft, nil)
+		drafted = papers.Select(fetched, window, *draft, nil)
 		draftPushed = papers.ForPush(drafted, draft.MaxPapers())
 	}
 	selectedAt := positions(selected)
@@ -168,7 +176,7 @@ func buildDay(date string, cutoff time.Time, lookback int, active papers.Rules, 
 		inDigest[paper.ID] = true
 	}
 	byID := map[string]Candidate{}
-	for _, paper := range windowPapers(fetched, cutoff, lookback) {
+	for _, paper := range windowPapers(fetched, window) {
 		explanation := papers.Explain(paper, active)
 		var draftExplanation papers.Explanation
 		if draft != nil {
@@ -181,18 +189,21 @@ func buildDay(date string, cutoff time.Time, lookback int, active papers.Rules, 
 		sent = []SentPaper{}
 	}
 	day := Day{
-		Date:         date,
-		Cutoff:       cutoff,
-		LookbackDays: lookback,
-		Sent:         sent,
-		Selected:     pick(selected, byID),
-		Pushed:       pick(pushed, byID),
-		PushLimit:    active.MaxPapers(),
-		Loose:        pick(loose, byID),
-		Candidates:   []Candidate{},
-		OnlyCurrent:  []string{},
-		OnlyLoose:    []string{},
-		OnlySent:     []string{},
+		Date:             date,
+		Cutoff:           cutoff,
+		HasBatch:         hasBatch,
+		Announcement:     batch.Announcement,
+		SubmittedAfter:   batch.Window.After,
+		SubmittedThrough: batch.Window.Through,
+		Sent:             sent,
+		Selected:         pick(selected, byID),
+		Pushed:           pick(pushed, byID),
+		PushLimit:        active.MaxPapers(),
+		Loose:            pick(loose, byID),
+		Candidates:       []Candidate{},
+		OnlyCurrent:      []string{},
+		OnlyLoose:        []string{},
+		OnlySent:         []string{},
 	}
 	seen := map[string]bool{}
 	for _, paper := range selected {
@@ -247,11 +258,10 @@ func buildDay(date string, cutoff time.Time, lookback int, active papers.Rules, 
 	return day
 }
 
-func windowPapers(fetched []papers.Paper, now time.Time, lookback int) []papers.Paper {
-	cutoff := now.Add(-time.Duration(lookback) * 24 * time.Hour)
+func windowPapers(fetched []papers.Paper, window papers.Window) []papers.Paper {
 	kept := map[string]papers.Paper{}
 	for _, paper := range fetched {
-		if paper.ID == "" || paper.Published.IsZero() || paper.Published.Before(cutoff) || paper.Published.After(now) {
+		if paper.ID == "" || !window.Contains(paper.Published) {
 			continue
 		}
 		if current, exists := kept[paper.ID]; !exists || paper.Published.After(current.Published) {
@@ -391,7 +401,11 @@ func Format(report Report) string {
 		if i > 0 {
 			b.WriteString("\n")
 		}
-		fmt.Fprintf(&b, "筛选预览 %s  截止 %s  回看 %d 天\n", day.Date, day.Cutoff.Format(time.RFC3339), day.LookbackDays)
+		if !day.HasBatch {
+			fmt.Fprintf(&b, "筛选预览 %s  没有新的 arXiv 公告\n", day.Date)
+		} else {
+			fmt.Fprintf(&b, "筛选预览 %s  arXiv 公告日 %s（美东）  提交 %s 之后至 %s\n", day.Date, day.Announcement, day.SubmittedAfter.UTC().Format(time.RFC3339), day.SubmittedThrough.UTC().Format(time.RFC3339))
+		}
 		b.WriteString("不调用模型，不发送飞书，不写入日报或去重记录。\n")
 		fmt.Fprintf(&b, "收集 %d 篇，将推送 %d 篇（上限 %d）；宽松基线 %d 篇；当日已保存 %d 篇。\n", len(day.Selected), len(day.Pushed), day.PushLimit, len(day.Loose), len(day.Sent))
 		if day.Draft != nil {

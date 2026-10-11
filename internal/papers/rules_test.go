@@ -56,7 +56,7 @@ func TestSelectHonorsConfiguredMaxPapers(t *testing.T) {
 			Published: now.Add(-time.Duration(i+1) * time.Hour),
 		})
 	}
-	got := Select(papers, now, 7, DefaultRules(), nil)
+	got := Select(papers, Window{After: now.Add(-24 * time.Hour), Through: now}, DefaultRules(), nil)
 	if len(got) != 6 {
 		t.Fatalf("collected = %d, want all 6 qualifying papers", len(got))
 	}
@@ -66,7 +66,7 @@ func TestSelectHonorsConfiguredMaxPapers(t *testing.T) {
 	if pushed := ForPush(got, rules.MaxPapers()); len(pushed) != 6 {
 		t.Fatalf("configured push = %d, want 6", len(pushed))
 	}
-	if Select(papers, now, 7, Rules{}, nil) != nil {
+	if Select(papers, Window{After: now.Add(-24 * time.Hour), Through: now}, Rules{}, nil) != nil {
 		t.Fatal("inactive rules selected papers")
 	}
 }
