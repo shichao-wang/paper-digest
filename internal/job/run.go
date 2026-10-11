@@ -16,8 +16,9 @@ import (
 
 const Topic = "recommendation-advertising-search"
 
-// errScreeningClosed marks a day that must not be sent. The scheduler logs it
-// once; the next Generate sees status missed and does not try again.
+// errScreeningClosed marks a day that must not be sent. Screening failure and a
+// summary resume that cannot finish before the deadline both return it. The
+// scheduler logs it once; the next Generate sees status missed and does not try again.
 var errScreeningClosed = errors.New("screening closed")
 
 type Runner struct {
@@ -97,6 +98,11 @@ func (r *Runner) Generate(ctx context.Context, date string) error {
 	if err != nil {
 		return err
 	}
+	// A processing resume skips fitsDeadline. Estimate the remaining summary
+	// waves before paying for them, including a minute of margin.
+	if err := r.fitsSummaryDeadline(ctx, len(remaining)); err != nil {
+		return r.closeDay(ctx, date, summaryDeadlineReason(err))
+	}
 	if err := r.summarize(ctx, date, remaining); err != nil {
 		return err
 	}
@@ -156,7 +162,10 @@ func (r *Runner) screen(ctx context.Context, date string, collected []papers.Pap
 }
 
 func (r *Runner) failScreening(ctx context.Context, date string, cause error) error {
-	reason := screeningReason(cause)
+	return r.closeDay(ctx, date, screeningReason(cause))
+}
+
+func (r *Runner) closeDay(ctx context.Context, date, reason string) error {
 	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	if err := r.Store.MarkMissedWithReason(writeCtx, Topic, date, reason); err != nil {
@@ -202,6 +211,30 @@ func (r *Runner) fitsDeadline(ctx context.Context, papers int) error {
 		return nil
 	}
 	return fmt.Errorf("距离截止还剩 %s，按当前超时和并发完成本次精筛与摘要大约需要 %s（精筛 %s，摘要最多 %d 篇 %s）", left.Round(time.Second), need.Round(time.Second), screenNeed.Round(time.Second), summaries, summaryNeed.Round(time.Second))
+}
+
+// fitsSummaryDeadline reports whether the remaining one-paper summaries can
+// finish at least a minute before the context deadline. No deadline, or no
+// papers left, is not a reason to close the day.
+func (r *Runner) fitsSummaryDeadline(ctx context.Context, papers int) error {
+	deadline, ok := ctx.Deadline()
+	if !ok || papers == 0 {
+		return nil
+	}
+	concurrency := r.SummaryConcurrency
+	if concurrency <= 0 {
+		concurrency = digest.DefaultSummaryConcurrency
+	}
+	timeout := r.SummaryTimeout
+	if timeout <= 0 {
+		timeout = digest.DefaultSummaryTimeout
+	}
+	need := digest.PhaseDuration(papers, 1, concurrency, timeout) + time.Minute
+	left := time.Until(deadline)
+	if left >= need {
+		return nil
+	}
+	return fmt.Errorf("距离截止还剩 %s，按当前超时和并发完成剩余 %d 篇摘要大约需要 %s", left.Round(time.Second), papers, need.Round(time.Second))
 }
 
 func (r *Runner) summarize(ctx context.Context, date string, remaining []papers.Paper) error {
@@ -261,12 +294,20 @@ func (r *Runner) summarize(ctx context.Context, date string, remaining []papers.
 }
 
 func screeningReason(cause error) string {
+	return boundedReason("精筛失败，当天不发送：", cause)
+}
+
+func summaryDeadlineReason(cause error) string {
+	return boundedReason("剩余摘要来不及在截止前完成，当天不发送：", cause)
+}
+
+func boundedReason(prefix string, cause error) string {
 	text := strings.TrimSpace(cause.Error())
 	text = strings.Join(strings.Fields(text), " ")
 	if runes := []rune(text); len(runes) > 400 {
 		text = string(runes[:400]) + "…"
 	}
-	return "精筛失败，当天不发送：" + text
+	return prefix + text
 }
 
 func (r *Runner) Deliver(ctx context.Context, date string) error {

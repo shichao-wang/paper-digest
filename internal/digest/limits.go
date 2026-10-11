@@ -31,15 +31,16 @@ const (
 	minThinkingBudget = 1024
 )
 
-// CallInput is the raw per-stage agent config. Zero values mean “use the default”.
+// CallInput is the raw per-stage agent config. Nil numeric fields mean “use the default”.
+// A non-nil value, including 0, is explicit and must fall inside the supported range.
 type CallInput struct {
 	Model          string
 	Skill          string
-	MaxTokens      int
-	TimeoutSeconds int
-	BatchSize      int
-	Concurrency    int
-	BudgetTokens   int
+	MaxTokens      *int
+	TimeoutSeconds *int
+	BatchSize      *int
+	Concurrency    *int
+	BudgetTokens   *int
 }
 
 // CallSettings is one model call's output cap, timeout, and parallelism.
@@ -82,11 +83,11 @@ func NormalizeScreen(in CallInput, name string) (CallSettings, error) {
 	if err := applyCall(&out, in, name); err != nil {
 		return CallSettings{}, err
 	}
-	if in.BatchSize != 0 {
-		if in.BatchSize < 1 || in.BatchSize > maxBatchSize {
+	if in.BatchSize != nil {
+		if *in.BatchSize < 1 || *in.BatchSize > maxBatchSize {
 			return CallSettings{}, fmt.Errorf("%s.batch_size 必须在 1 到 %d 之间", name, maxBatchSize)
 		}
-		out.BatchSize = in.BatchSize
+		out.BatchSize = *in.BatchSize
 	}
 	if err := applyThinking(&out, in.BudgetTokens, name); err != nil {
 		return CallSettings{}, err
@@ -111,36 +112,37 @@ func applyCall(out *CallSettings, in CallInput, name string) error {
 	if skill := strings.TrimSpace(in.Skill); skill != "" {
 		out.Skill = skill
 	}
-	if in.MaxTokens != 0 {
-		if in.MaxTokens < minMaxTokens || in.MaxTokens > maxMaxTokens {
+	if in.MaxTokens != nil {
+		if *in.MaxTokens < minMaxTokens || *in.MaxTokens > maxMaxTokens {
 			return fmt.Errorf("%s.max_tokens 必须在 %d 到 %d 之间", name, minMaxTokens, maxMaxTokens)
 		}
-		out.MaxTokens = in.MaxTokens
+		out.MaxTokens = *in.MaxTokens
 	}
-	if in.TimeoutSeconds != 0 {
-		timeout := time.Duration(in.TimeoutSeconds) * time.Second
+	if in.TimeoutSeconds != nil {
+		timeout := time.Duration(*in.TimeoutSeconds) * time.Second
 		if timeout < minTimeout || timeout > maxTimeout {
 			return fmt.Errorf("%s.timeout_seconds 必须在 %d 到 %d 之间", name, int(minTimeout/time.Second), int(maxTimeout/time.Second))
 		}
 		out.Timeout = timeout
 	}
-	if in.Concurrency != 0 {
-		if in.Concurrency < 1 || in.Concurrency > maxConcurrency {
+	if in.Concurrency != nil {
+		if *in.Concurrency < 1 || *in.Concurrency > maxConcurrency {
 			return fmt.Errorf("%s.concurrency 必须在 1 到 %d 之间", name, maxConcurrency)
 		}
-		out.Concurrency = in.Concurrency
+		out.Concurrency = *in.Concurrency
 	}
 	return nil
 }
 
-func applyThinking(out *CallSettings, budget int, name string) error {
-	if budget == 0 {
-		budget = ThinkingBudget
+func applyThinking(out *CallSettings, budget *int, name string) error {
+	value := ThinkingBudget
+	if budget != nil {
+		value = *budget
 	}
-	if budget < minThinkingBudget || budget >= out.MaxTokens {
+	if value < minThinkingBudget || value >= out.MaxTokens {
 		return fmt.Errorf("%s.thinking.budget_tokens 必须在 %d 到 %d 之间，并且小于 max_tokens（当前 %d）。DeepSeek 会忽略这个预算，思考计入 max_tokens", name, minThinkingBudget, out.MaxTokens-1, out.MaxTokens)
 	}
-	out.ThinkingBudget = budget
+	out.ThinkingBudget = value
 	return nil
 }
 

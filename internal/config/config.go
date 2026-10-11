@@ -37,19 +37,20 @@ type TopicSkills struct {
 	Summary   string `json:"summary,omitempty"`
 }
 
-// StageAgent is one pipeline stage's model agent. Omitted fields use defaults.
+// StageAgent is one pipeline stage's model agent. Nil numeric fields use defaults.
+// An explicit 0, or any other value outside the supported range, is rejected.
 // Model falls back to anthropic.model, then deepseek-flash. Skill is a loaded
 // skill name, not a file path. Thinking stays on; budget_tokens is the value
-// sent to Anthropic and is ignored by DeepSeek.
+// sent to Anthropic and is ignored by DeepSeek. Summary rejects any batch_size.
 type StageAgent struct {
 	Model          string `json:"model,omitempty"`
 	Skill          string `json:"skill,omitempty"`
-	MaxTokens      int    `json:"max_tokens,omitempty"`
-	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
-	BatchSize      int    `json:"batch_size,omitempty"`
-	Concurrency    int    `json:"concurrency,omitempty"`
+	MaxTokens      *int   `json:"max_tokens,omitempty"`
+	TimeoutSeconds *int   `json:"timeout_seconds,omitempty"`
+	BatchSize      *int   `json:"batch_size,omitempty"`
+	Concurrency    *int   `json:"concurrency,omitempty"`
 	Thinking       *struct {
-		BudgetTokens int `json:"budget_tokens,omitempty"`
+		BudgetTokens *int `json:"budget_tokens,omitempty"`
 	} `json:"thinking,omitempty"`
 }
 
@@ -191,8 +192,8 @@ func (c *Config) normalizeAgents() error {
 	if c.Agents != nil && c.Agents.Summary != nil {
 		summary = *c.Agents.Summary
 	}
-	if summary.BatchSize != 0 {
-		return errors.New("agents.summary 不使用 batch_size，摘要每次只处理一篇")
+	if summary.BatchSize != nil {
+		return errors.New("agents.summary.batch_size 不能设置，摘要每次只处理一篇")
 	}
 	if err := validSkillName("agents.screening.skill", screening.Skill); err != nil {
 		return err

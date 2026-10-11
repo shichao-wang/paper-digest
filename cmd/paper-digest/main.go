@@ -381,7 +381,8 @@ func serve(parent context.Context, cfg config.Config, options serveOptions, deps
 			defer handlers.Done()
 			handler.ServeHTTP(w, r)
 		}),
-		// 写超时要盖住筛选评估里的 arXiv 抓取；其余接口本身很快。
+		// 写超时盖住普通筛选评估里的 arXiv 抓取。精筛预览会在处理函数里按预算
+		// 单独延长本次响应的写截止时间，避免把全局超时拉到 20 分钟。
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 4 * time.Minute,
 		IdleTimeout: 60 * time.Second, BaseContext: func(net.Listener) context.Context { return ctx },
 	}

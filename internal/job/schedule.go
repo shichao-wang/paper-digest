@@ -42,7 +42,7 @@ func (r *Runner) serve(ctx context.Context, logger *slog.Logger, ticks <-chan ti
 					workCtx, cancel := context.WithDeadline(ctx, deadline)
 					defer cancel()
 					if err := r.Generate(workCtx, date); err != nil && errors.Is(err, errScreeningClosed) {
-						logger.Error("精筛失败，当天不发送", "date", date, "error", err)
+						logger.Error("当天不发送", "date", date, "error", err)
 					} else if err != nil && workCtx.Err() == nil {
 						logger.Error("日报生成未完成，稍后重试", "date", date, "error", err)
 					}

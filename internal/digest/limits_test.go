@@ -28,20 +28,31 @@ func TestNormalizeRejectsLimitsOutsideTheSupportedRange(t *testing.T) {
 	if err != nil || summary != DefaultSummaryCall() {
 		t.Fatalf("summary defaults = %+v, %v", summary, err)
 	}
-	if _, err := NormalizeScreen(CallInput{MaxTokens: 1024}, "agents.screening"); err == nil || !strings.Contains(err.Error(), "agents.screening.max_tokens") {
+	if _, err := NormalizeScreen(CallInput{MaxTokens: pint(1024)}, "agents.screening"); err == nil || !strings.Contains(err.Error(), "agents.screening.max_tokens") {
 		t.Fatalf("small max_tokens error = %v", err)
 	}
-	if _, err := NormalizeSummary(CallInput{TimeoutSeconds: 1}, "agents.summary"); err == nil {
+	if _, err := NormalizeScreen(CallInput{MaxTokens: pint(0)}, "agents.screening"); err == nil || !strings.Contains(err.Error(), "agents.screening.max_tokens") {
+		t.Fatalf("explicit zero max_tokens error = %v", err)
+	}
+	if _, err := NormalizeSummary(CallInput{TimeoutSeconds: pint(1)}, "agents.summary"); err == nil {
 		t.Fatal("one-second timeout was accepted")
 	}
-	if _, err := NormalizeScreen(CallInput{Concurrency: 8}, "agents.screening"); err == nil {
+	if _, err := NormalizeSummary(CallInput{TimeoutSeconds: pint(0)}, "agents.summary"); err == nil || !strings.Contains(err.Error(), "agents.summary.timeout_seconds") {
+		t.Fatalf("explicit zero timeout error = %v", err)
+	}
+	if _, err := NormalizeScreen(CallInput{Concurrency: pint(8)}, "agents.screening"); err == nil {
 		t.Fatal("unbounded concurrency was accepted")
 	}
-	if _, err := NormalizeScreen(CallInput{BudgetTokens: 16384}, "agents.screening"); err == nil || !strings.Contains(err.Error(), "budget_tokens") {
+	if _, err := NormalizeScreen(CallInput{BudgetTokens: pint(16384)}, "agents.screening"); err == nil || !strings.Contains(err.Error(), "budget_tokens") {
 		t.Fatalf("budget above max_tokens error = %v", err)
 	}
-	custom, err := NormalizeScreen(CallInput{Model: " other-model ", Skill: "custom-screen", MaxTokens: 32768, TimeoutSeconds: 240, BatchSize: 4, Concurrency: 3, BudgetTokens: 4096}, "agents.screening")
+	if _, err := NormalizeScreen(CallInput{BudgetTokens: pint(0)}, "agents.screening"); err == nil || !strings.Contains(err.Error(), "agents.screening.thinking.budget_tokens") {
+		t.Fatalf("explicit zero budget error = %v", err)
+	}
+	custom, err := NormalizeScreen(CallInput{Model: " other-model ", Skill: "custom-screen", MaxTokens: pint(32768), TimeoutSeconds: pint(240), BatchSize: pint(4), Concurrency: pint(3), BudgetTokens: pint(4096)}, "agents.screening")
 	if err != nil || custom.Model != "other-model" || custom.Skill != "custom-screen" || custom.MaxTokens != 32768 || custom.Timeout != 240*time.Second || custom.BatchSize != 4 || custom.Concurrency != 3 || custom.ThinkingBudget != 4096 {
 		t.Fatalf("custom = %+v, %v", custom, err)
 	}
 }
+
+func pint(v int) *int { return &v }
