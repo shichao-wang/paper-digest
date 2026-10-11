@@ -20,7 +20,12 @@ const (
 	DefaultScreenBatchSize    = 8
 	DefaultScreenConcurrency  = 2
 	DefaultSummaryConcurrency = 2
-	ScreenAttempts            = 3
+	// ScreenAttempts is how many times one screening batch may call the model.
+	// Attempts run one after another, each with its own timeout.
+	ScreenAttempts = 3
+	// SummaryAttempts is 1: each summary is a single request and is not retried
+	// inside the same generate pass.
+	SummaryAttempts = 1
 
 	minMaxTokens      = 4096
 	maxMaxTokens      = 65536
@@ -146,9 +151,12 @@ func applyThinking(out *CallSettings, budget *int, name string) error {
 	return nil
 }
 
-// PhaseDuration is the time for one pass over items, at the configured timeout,
-// plus one spare attempt. batchSize is 1 for per-paper summaries.
-func PhaseDuration(items, batchSize, concurrency int, timeout time.Duration) time.Duration {
+// PhaseDuration is the worst case for every batch to use every attempt.
+// Attempts on one batch run one after another. Batches in one wave run
+// together, so a wave takes attempts*timeout. Summaries pass SummaryAttempts
+// because each paper is a single request. attempts below 1 counts as one pass.
+// batchSize is 1 for per-paper summaries.
+func PhaseDuration(items, batchSize, concurrency, attempts int, timeout time.Duration) time.Duration {
 	if items <= 0 || timeout <= 0 {
 		return 0
 	}
@@ -158,7 +166,10 @@ func PhaseDuration(items, batchSize, concurrency int, timeout time.Duration) tim
 	if concurrency < 1 {
 		concurrency = 1
 	}
+	if attempts < 1 {
+		attempts = 1
+	}
 	batches := (items + batchSize - 1) / batchSize
 	waves := (batches + concurrency - 1) / concurrency
-	return time.Duration(waves)*timeout + timeout
+	return time.Duration(waves*attempts) * timeout
 }

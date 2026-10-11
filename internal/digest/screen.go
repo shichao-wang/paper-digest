@@ -104,9 +104,9 @@ func (s Screener) Screen(ctx context.Context, list []papers.Paper) ([]Decision, 
 		concurrency = DefaultScreenConcurrency
 	}
 	if deadline, ok := ctx.Deadline(); ok {
-		need := PhaseDuration(len(list), batchSize, concurrency, timeout)
+		need := PhaseDuration(len(list), batchSize, concurrency, attempts, timeout)
 		if left := time.Until(deadline); left < need {
-			return nil, fmt.Errorf("距离截止还剩 %s，完成本次精筛大约需要 %s（%d 篇，每批 %d，并发 %d，单次超时 %s，max_tokens=%d）", left.Round(time.Second), need.Round(time.Second), len(list), batchSize, concurrency, timeout, maxTokens)
+			return nil, fmt.Errorf("距离截止还剩 %s，完成本次精筛大约需要 %s（%d 篇，每批 %d，并发 %d，每批最多 %d 次，单次超时 %s，max_tokens=%d）", left.Round(time.Second), need.Round(time.Second), len(list), batchSize, concurrency, attempts, timeout, maxTokens)
 		}
 	}
 

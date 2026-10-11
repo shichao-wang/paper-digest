@@ -203,8 +203,8 @@ func (r *Runner) fitsDeadline(ctx context.Context, papers int) error {
 	if summaries > papers {
 		summaries = papers
 	}
-	screenNeed := digest.PhaseDuration(papers, batch, screenConc, screenTimeout)
-	summaryNeed := digest.PhaseDuration(summaries, 1, summaryConc, summaryTimeout)
+	screenNeed := digest.PhaseDuration(papers, batch, screenConc, digest.ScreenAttempts, screenTimeout)
+	summaryNeed := digest.PhaseDuration(summaries, 1, summaryConc, digest.SummaryAttempts, summaryTimeout)
 	need := screenNeed + summaryNeed + time.Minute
 	left := time.Until(deadline)
 	if left >= need {
@@ -229,7 +229,7 @@ func (r *Runner) fitsSummaryDeadline(ctx context.Context, papers int) error {
 	if timeout <= 0 {
 		timeout = digest.DefaultSummaryTimeout
 	}
-	need := digest.PhaseDuration(papers, 1, concurrency, timeout) + time.Minute
+	need := digest.PhaseDuration(papers, 1, concurrency, digest.SummaryAttempts, timeout) + time.Minute
 	left := time.Until(deadline)
 	if left >= need {
 		return nil

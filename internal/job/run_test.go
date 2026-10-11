@@ -114,7 +114,7 @@ func TestSummaryDeadlineIsPhaseDurationPlusOneMinute(t *testing.T) {
 	r := testRunner(t)
 	r.SummaryTimeout = 30 * time.Second
 	r.SummaryConcurrency = 1
-	need := digest.PhaseDuration(1, 1, 1, r.SummaryTimeout) + time.Minute
+	need := digest.PhaseDuration(1, 1, 1, digest.SummaryAttempts, r.SummaryTimeout) + time.Minute
 	tight, cancelTight := context.WithTimeout(context.Background(), need-time.Second)
 	defer cancelTight()
 	if err := r.fitsSummaryDeadline(tight, 1); err == nil || !strings.Contains(err.Error(), "距离截止") || !strings.Contains(err.Error(), "1 篇") {

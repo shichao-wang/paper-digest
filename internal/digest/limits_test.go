@@ -6,16 +6,22 @@ import (
 	"time"
 )
 
-func TestPhaseDurationLeavesRoomForOneSpareAttempt(t *testing.T) {
-	got := PhaseDuration(30, 8, 2, 180*time.Second)
-	if got != 540*time.Second {
-		t.Fatalf("30 papers = %s, want 9m", got)
+func TestPhaseDurationCountsEveryScreeningAttempt(t *testing.T) {
+	// 30 papers, batches of 8, concurrency 2: 4 batches and 2 waves.
+	// Each batch may use all 3 attempts, so a wave is 9 minutes and the phase is 18.
+	got := PhaseDuration(30, 8, 2, ScreenAttempts, 180*time.Second)
+	if got != 18*time.Minute {
+		t.Fatalf("screening = %s, want 18m", got)
 	}
-	if PhaseDuration(5, 1, 2, 120*time.Second) != 480*time.Second {
+	// Summaries are one request each: 5 papers at concurrency 2 is 3 waves, 6 minutes.
+	if PhaseDuration(5, 1, 2, SummaryAttempts, 120*time.Second) != 6*time.Minute {
 		t.Fatal("summaries")
 	}
-	if PhaseDuration(0, 8, 2, time.Minute) != 0 {
+	if PhaseDuration(0, 8, 2, ScreenAttempts, time.Minute) != 0 {
 		t.Fatal("empty work should take no time")
+	}
+	if PhaseDuration(8, 8, 2, 0, time.Minute) != time.Minute {
+		t.Fatal("attempts below 1 should count as one pass")
 	}
 }
 

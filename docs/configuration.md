@@ -78,7 +78,7 @@ docker compose up -d --force-recreate paper-digest
 
 使用兼容 Anthropic Messages API 的服务时，将 `anthropic.base_url` 填为服务根地址（不额外添加 `/v1`），并配置密钥和默认模型名称。示例指向 DeepSeek 的 Anthropic 兼容地址和 `deepseek-flash`。`anthropic` 只保留这三项。精筛和摘要各自写在顶层 `agents.screening` 与 `agents.summary`：模型、技能名、`max_tokens`、超时、并发，精筛另有 `batch_size`，以及 `thinking.budget_tokens`。阶段上的 `model` 省略时用 `anthropic.model`。不写 `agents`，或只写其中一部分字段，其余用内置默认：精筛 `max_tokens` 16384、超时 180 秒、每批 8 篇、并发 2、技能 `paper-screening`；摘要 `max_tokens` 8192、超时 120 秒、并发 2、技能 `paper-summary`。两边的思考预算默认 2048，必须小于该阶段的 `max_tokens`。思考保持开启。DeepSeek 的 Anthropic 兼容接口会忽略 `budget_tokens`，思考占用的是 `max_tokens` 整段输出额度。已经部署、只有 `anthropic.api_key`、`model`、`base_url` 的配置不用加 `agents` 也能加载。把 `screening` 或 `summary` 写进 `anthropic` 会拒绝启动，并提示改到 `agents`。改完保存后重新创建容器即可，不必重新构建镜像。若响应仍是 `stop_reason=max_tokens`，错误里会写上这次使用的 `max_tokens` 和 `budget_tokens`。宿主机直接运行 CLI 若走本地网关，可用 `http://127.0.0.1:3425`；Docker Desktop 容器应使用 `http://host.docker.internal:3425` 访问宿主机。`base_url` 留空时使用默认 Anthropic API 地址。配置后仍保持 `delivery.enabled=false`，直至完成飞书试发和投递确认。
 
-按上述默认值，约 30 篇粗筛候选是 4 个精筛批次，并发 2，大约两轮。一轮按单次超时计是 3 分钟，并额外留一次重试。随后最多 `max_papers` 篇摘要（默认 5）并发 2，大约三轮，再加一次重试余量。加上采集，通常十几分钟，计划上的上限大约半小时，落在 08:00 开始、09:00 截止的窗口里。启动精筛前会按这个计划检查剩余时间；来不及完成就记为 `missed` 且不调用模型。输出令牌按实际生成计费，`max_tokens` 只是上限。
+按上述默认值，约 30 篇粗筛候选是 4 个精筛批次，并发 2，也就是两轮。每一批最多 3 次，一次按 180 秒计，同一轮并行，所以一轮最多 9 分钟，两轮是 18 分钟。摘要每次只请求一次：最多 `max_papers` 篇（默认 5）并发 2，大约三轮，每轮 120 秒，一共 6 分钟。再留 1 分钟给落库。加上采集的几分钟，计划上的上限大约半小时，落在 08:00 开始、09:00 截止的窗口里。启动精筛前会按每一批都会用满 3 次来检查剩余时间；来不及完成就记为 `missed` 且不调用模型。输出令牌按实际生成计费，`max_tokens` 只是上限。
 
 ## 旧环境变量迁移与重载
 

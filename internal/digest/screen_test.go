@@ -180,3 +180,22 @@ func TestScreenRefusesWorkThatCannotFinishBeforeTheDeadline(t *testing.T) {
 		t.Fatalf("err = %v, calls = %d", err, calls)
 	}
 }
+
+func TestScreenRefusesWhenRetriesCannotFitEvenIfOnePassCan(t *testing.T) {
+	// Four batches at concurrency 2 are two waves. One pass plus a spare is 3s.
+	// Three attempts on each batch is 6s, so 4s is not enough to start.
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	calls := 0
+	screener := Screener{
+		Timeout: time.Second, BatchSize: 1, Concurrency: 2,
+		request: func(context.Context, string, string, string, string) (string, error) {
+			calls++
+			return "", nil
+		},
+	}
+	_, err := screener.Screen(ctx, []papers.Paper{{ID: "arxiv:a"}, {ID: "arxiv:b"}, {ID: "arxiv:c"}, {ID: "arxiv:d"}})
+	if err == nil || calls != 0 || !strings.Contains(err.Error(), "每批最多 3 次") {
+		t.Fatalf("err = %v, calls = %d", err, calls)
+	}
+}
