@@ -24,6 +24,8 @@ const (
 // Selection is the JSON form of one topic's paper filter. Patterns run against
 // lowercased title and abstract text.
 type Selection struct {
+	// MaxPapers is how many collected papers are summarized and pushed.
+	// It does not limit arXiv paging or how many papers the rules collect.
 	MaxPapers      int        `json:"max_papers"`
 	MinTier        int        `json:"min_tier"`
 	Query          Query      `json:"query"`

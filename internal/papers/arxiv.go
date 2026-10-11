@@ -22,8 +22,12 @@ const defaultBaseURL = "https://export.arxiv.org/api/query"
 const legacyRASSearchQuery = `(cat:cs.IR OR ti:recommender OR ti:recommendation OR abs:recommender OR abs:"collaborative filtering" OR ti:advertising OR ti:advertisement OR ti:advertiser OR abs:advertising OR abs:"click-through" OR abs:"sponsored search" OR abs:"ad auction" OR abs:"ad allocation" OR abs:"ad ranking" OR abs:"ad targeting" OR ti:retrieval OR abs:"information retrieval" OR abs:"document retrieval" OR abs:"dense retrieval" OR abs:"query understanding" OR abs:"query rewriting" OR abs:"learning to rank" OR ti:"web search" OR ti:"search engine" OR ti:"conversational search" OR abs:"search ranking" OR abs:"sequential recommendation")`
 
 var (
-	arxivPageSize  = 100
-	arxivMaxPages  = 16
+	arxivPageSize = 100
+	// arxivMaxPages is a runaway guard, not a product cap. Paging stops when the
+	// lookback window is exhausted. A full page that is still inside the window
+	// after this many requests is an error, so the digest does not silently
+	// drop the rest. The delay between pages is arXiv's requested spacing.
+	arxivMaxPages  = 24
 	arxivPageDelay = 3 * time.Second
 )
 
@@ -72,9 +76,10 @@ func Fetch(ctx context.Context, client *http.Client, baseURL string, limit int) 
 	return fetchPage(ctx, client, baseURL, 0, limit, DefaultRules().Query)
 }
 
-// FetchSince pages searchQuery newest first until a page ends before since or
-// the page cap is reached. since is the start of the lookback window. An empty
-// query is rejected so a caller cannot silently fall back to another topic.
+// FetchSince pages searchQuery newest first until the lookback window is
+// exhausted. since is the start of that window. An empty query is rejected.
+// The page count is only a safety stop: hitting it while results are still
+// inside the window returns an error instead of a shortened list.
 func FetchSince(ctx context.Context, client *http.Client, baseURL string, since time.Time, searchQuery string) ([]Paper, error) {
 	if strings.TrimSpace(searchQuery) == "" {
 		return nil, fmt.Errorf("arXiv search query is required")
@@ -101,14 +106,14 @@ func FetchSince(ctx context.Context, client *http.Client, baseURL string, since 
 			return nil, err
 		}
 		if len(batch) == 0 {
-			break
+			return all, nil
 		}
 		all = append(all, batch...)
 		if len(batch) < arxivPageSize || !submittedInWindow(batch[len(batch)-1], since) {
-			break
+			return all, nil
 		}
 	}
-	return all, nil
+	return nil, fmt.Errorf("arXiv lookback still had results after %d pages; refusing to drop the rest of the window", arxivMaxPages)
 }
 
 func submittedInWindow(paper Paper, since time.Time) bool {

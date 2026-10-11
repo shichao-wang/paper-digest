@@ -56,6 +56,36 @@ func jobStatus(t *testing.T, r *Runner, date string) string {
 	return current.Status
 }
 
+func TestGenerateSummarizesOnlyThePushSet(t *testing.T) {
+	r := testRunner(t)
+	spec := papers.DefaultSelection()
+	spec.MaxPapers = 1
+	rules, err := papers.Compile(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Rules = rules
+	now := r.Now()
+	var analyzed []string
+	r.Analyzer = analyzerFunc(func(_ context.Context, paper papers.Paper) (digest.Summary, error) {
+		analyzed = append(analyzed, paper.ID)
+		return digest.Summary{Text: "基于摘要的中文要点", Model: "fixture", PromptVersion: "test"}, nil
+	})
+	r.Fetch = func(context.Context) ([]papers.Paper, error) {
+		return []papers.Paper{
+			{ID: "arxiv:newest", Title: "Web Search Ranking", Published: now.Add(-time.Hour), URL: "https://arxiv.org/abs/newest"},
+			{ID: "arxiv:older", Title: "Web Search Ranking", Published: now.Add(-2 * time.Hour), URL: "https://arxiv.org/abs/older"},
+			{ID: "arxiv:oldest", Title: "Web Search Ranking", Published: now.Add(-3 * time.Hour), URL: "https://arxiv.org/abs/oldest"},
+		}, nil
+	}
+	if err := r.Generate(context.Background(), BeijingDate(now)); err != nil {
+		t.Fatal(err)
+	}
+	if len(analyzed) != 1 || analyzed[0] != "arxiv:newest" {
+		t.Fatalf("summarized %v, want only the newest paper", analyzed)
+	}
+}
+
 func TestDatabaseSenderResolvesBeforeClaimAndUpdatesDynamically(t *testing.T) {
 	r := testRunner(t)
 	ctx := context.Background()

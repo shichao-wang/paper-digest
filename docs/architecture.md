@@ -6,9 +6,9 @@
 
 `cmd/paper-digest` 加载 JSON、打开 SQLite、迁移旧 Webhook 并启动 HTTP 服务；`delivery.enabled=true` 时才校验模型密钥、恢复中断发送状态、启动单个 worker。HTTP 服务与 worker 共用 Store，取消与退出时等请求和任务完成后关闭数据库。
 
-worker 在北京时间 08:00～09:00 按首次发布日期分页获取 arXiv 公开元数据。查询和分档来自该主题的 `selection`；联合主题省略这段时使用内置规则，只匹配标题、摘要和 `cs.IR`，不使用 `all:` 全文检索。分页覆盖 `arxiv.lookback_days`，而不是固定取最新 100 条。筛选会跳过已确认的推荐历史。内置规则按相关度分档：标题中的推荐、计算广告或检索术语优先；`cs.IR` 还要同时出现 retrieval、ranking、softmax sampling 等技术信号；只有摘要里的强术语时档位较低。单独的 `cs.IR`、孤立的 “search”“ads”“recommendation”，以及 private information retrieval（包括 DNA 存储 PIR）不能入选。结果按相关度、再按首次发布日期排序，默认最多 5 篇；相关论文不足时少发，不用弱匹配补满。不会抓取全文、项目页或解读网页。改筛选规则只改配置并重启容器，不需要新镜像。
+worker 在北京时间 08:00～09:00 按首次发布日期分页获取 arXiv 公开元数据。查询和分档来自该主题的 `selection`；联合主题省略这段时使用内置规则，只匹配标题、摘要和 `cs.IR`，不使用 `all:` 全文检索。分页覆盖整个 `arxiv.lookback_days` 窗口，页间隔 3 秒，最多 24 页只用来阻止失控翻页；窗口未结束就到达该页数时本次采集失败，不保存截断结果。筛选会跳过已确认的推荐历史。内置规则按相关度分档：标题中的推荐、计算广告或检索术语优先；`cs.IR` 还要同时出现 retrieval、ranking、softmax sampling 等技术信号；只有摘要里的强术语时档位较低。单独的 `cs.IR`、孤立的 “search”“ads”“recommendation”，以及 private information retrieval（包括 DNA 存储 PIR）不收集。合格论文全部按相关度、再按首次发布日期排好。`max_papers`（默认 5）只截取这个序列的前缀：只有这些论文会生成摘要并进入飞书日报。相关论文不足时少发，不用弱匹配补满。不会抓取全文、项目页或解读网页。改筛选规则只改配置并重启容器，不需要新镜像。
 
-筛选评估（`paper-digest eval`、`GET /api/eval` 与 `POST /api/eval`）用已加载的规则预览指定日期，截止时刻为当天北京时间 09:00，回看天数仍是 `arxiv.lookback_days`。`POST` 和 `eval --rules` 额外编译一份草稿，和当前规则并排比较；草稿不写回配置，也不发送。评估不调用模型、不发送飞书，也不写入 `jobs`、`job_papers`、`papers` 或 `recommendations`。宽松基线 `SelectLoose` 只用于对照，不参与日报。人工判断写入 `selection_labels`；旧数据库在打开时用 `CREATE TABLE IF NOT EXISTS` 建表。页面打开时只读取规则，不会自动抓取。预览可能访问 arXiv，因此这次请求的处理时限长于其他 API。
+筛选评估（`paper-digest eval`、`GET /api/eval` 与 `POST /api/eval`）用已加载的规则预览指定日期，截止时刻为当天北京时间 09:00，回看天数仍是 `arxiv.lookback_days`。它列出窗口内全部收集到的论文，并标出 `max_papers` 之内会推送的那些。`POST` 和 `eval --rules` 额外编译一份草稿，和当前规则并排比较；草稿不写回配置，也不发送。评估不调用模型、不发送飞书，也不写入 `jobs`、`job_papers`、`papers` 或 `recommendations`。宽松基线 `SelectLoose` 只用于对照，不参与日报。人工判断写入 `selection_labels`；旧数据库在打开时用 `CREATE TABLE IF NOT EXISTS` 建表。页面打开时只读取规则，不会自动抓取。预览可能访问 arXiv，因此这次请求的处理时限长于其他 API。精确率按将推送的论文计算。
 
 候选论文、版本和逐篇中文摘要写入 SQLite，全部完成后将日报记为 `ready`。模型摘要保存模型名称和提示版本；新摘要使用 `arxiv-summary-v2`，要点格式为 `- **标签**：正文`。渲染日报和发送卡片时也会规范历史标签，不改写存档。摘要完整性校验检查数学分隔符并跳过 Markdown 代码和链接目标。
 

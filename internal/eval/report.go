@@ -73,12 +73,14 @@ type Candidate struct {
 	Reason        string    `json:"reason"`
 	Selected      bool      `json:"selected"`
 	Position      int       `json:"position"`
+	Pushed        bool      `json:"pushed"`
 	LooseSelected bool      `json:"looseSelected"`
 	LoosePosition int       `json:"loosePosition"`
 	InDigest      bool      `json:"inDigest"`
 	Label         string    `json:"label"`
 	DraftSelected bool      `json:"draftSelected"`
 	DraftPosition int       `json:"draftPosition"`
+	DraftPushed   bool      `json:"draftPushed"`
 	DraftTier     int       `json:"draftTier"`
 	DraftSignals  []string  `json:"draftSignals"`
 	DraftReason   string    `json:"draftReason"`
@@ -86,6 +88,7 @@ type Candidate struct {
 
 type DraftComparison struct {
 	Selected   []Candidate `json:"selected"`
+	Pushed     []Candidate `json:"pushed"`
 	OnlyDraft  []string    `json:"onlyDraft"`
 	OnlyActive []string    `json:"onlyActive"`
 	Score      Score       `json:"score"`
@@ -104,6 +107,8 @@ type Day struct {
 	Cutoff       time.Time        `json:"cutoff"`
 	LookbackDays int              `json:"lookbackDays"`
 	Selected     []Candidate      `json:"selected"`
+	Pushed       []Candidate      `json:"pushed"`
+	PushLimit    int              `json:"pushLimit"`
 	Loose        []Candidate      `json:"loose"`
 	Sent         []SentPaper      `json:"sent"`
 	Candidates   []Candidate      `json:"candidates"`
@@ -145,14 +150,19 @@ func Build(topic string, dates []string, lookbackDays int, active papers.Rules, 
 
 func buildDay(date string, cutoff time.Time, lookback int, active papers.Rules, draft *papers.Rules, fetched []papers.Paper, sent []SentPaper, labels map[string]string) Day {
 	selected := papers.Select(fetched, cutoff, lookback, active, nil)
+	pushed := papers.ForPush(selected, active.MaxPapers())
 	loose := papers.SelectLoose(fetched, cutoff, lookback, 5, nil)
 	var drafted []papers.Paper
+	var draftPushed []papers.Paper
 	if draft != nil {
 		drafted = papers.Select(fetched, cutoff, lookback, *draft, nil)
+		draftPushed = papers.ForPush(drafted, draft.MaxPapers())
 	}
 	selectedAt := positions(selected)
+	pushedAt := positions(pushed)
 	looseAt := positions(loose)
 	draftAt := positions(drafted)
+	draftPushedAt := positions(draftPushed)
 	inDigest := map[string]bool{}
 	for _, paper := range sent {
 		inDigest[paper.ID] = true
@@ -164,7 +174,7 @@ func buildDay(date string, cutoff time.Time, lookback int, active papers.Rules, 
 		if draft != nil {
 			draftExplanation = papers.Explain(paper, *draft)
 		}
-		item := candidate(paper, explanation, selectedAt, looseAt, inDigest, labels, draft != nil, draftExplanation, draftAt)
+		item := candidate(paper, explanation, selectedAt, pushedAt, looseAt, inDigest, labels, draft != nil, draftExplanation, draftAt, draftPushedAt)
 		byID[paper.ID] = item
 	}
 	if sent == nil {
@@ -176,6 +186,8 @@ func buildDay(date string, cutoff time.Time, lookback int, active papers.Rules, 
 		LookbackDays: lookback,
 		Sent:         sent,
 		Selected:     pick(selected, byID),
+		Pushed:       pick(pushed, byID),
+		PushLimit:    active.MaxPapers(),
 		Loose:        pick(loose, byID),
 		Candidates:   []Candidate{},
 		OnlyCurrent:  []string{},
@@ -201,9 +213,10 @@ func buildDay(date string, cutoff time.Time, lookback int, active papers.Rules, 
 		}
 		day.Draft = &DraftComparison{
 			Selected:   pick(drafted, byID),
+			Pushed:     pick(draftPushed, byID),
 			OnlyDraft:  idsIn(pick(drafted, byID), func(item Candidate) bool { return !item.Selected }),
 			OnlyActive: idsIn(day.Selected, func(item Candidate) bool { return !item.DraftSelected }),
-			Score:      score(pick(drafted, byID)),
+			Score:      score(pick(draftPushed, byID)),
 		}
 	}
 	for _, paper := range loose {
@@ -226,11 +239,11 @@ func buildDay(date string, cutoff time.Time, lookback int, active papers.Rules, 
 	day.OnlyCurrent = idsIn(day.Selected, func(item Candidate) bool { return !item.LooseSelected })
 	day.OnlyLoose = idsIn(day.Loose, func(item Candidate) bool { return !item.Selected })
 	for _, paper := range sent {
-		if _, selected := selectedAt[paper.ID]; !selected {
+		if _, pushed := pushedAt[paper.ID]; !pushed {
 			day.OnlySent = append(day.OnlySent, paper.ID)
 		}
 	}
-	day.Score = score(day.Selected)
+	day.Score = score(day.Pushed)
 	return day
 }
 
@@ -260,7 +273,7 @@ func positions(list []papers.Paper) map[string]int {
 	return out
 }
 
-func candidate(paper papers.Paper, explanation papers.Explanation, selectedAt, looseAt map[string]int, inDigest map[string]bool, labels map[string]string, hasDraft bool, draftExplanation papers.Explanation, draftAt map[string]int) Candidate {
+func candidate(paper papers.Paper, explanation papers.Explanation, selectedAt, pushedAt, looseAt map[string]int, inDigest map[string]bool, labels map[string]string, hasDraft bool, draftExplanation papers.Explanation, draftAt, draftPushedAt map[string]int) Candidate {
 	position := selectedAt[paper.ID]
 	loosePosition := looseAt[paper.ID]
 	categories := paper.Categories
@@ -288,6 +301,7 @@ func candidate(paper papers.Paper, explanation papers.Explanation, selectedAt, l
 		Reason:        explanation.Reason,
 		Selected:      position > 0,
 		Position:      position,
+		Pushed:        pushedAt[paper.ID] > 0,
 		LooseSelected: loosePosition > 0,
 		LoosePosition: loosePosition,
 		InDigest:      inDigest[paper.ID],
@@ -300,6 +314,7 @@ func candidate(paper papers.Paper, explanation papers.Explanation, selectedAt, l
 		}
 		item.DraftSelected = draftAt[paper.ID] > 0
 		item.DraftPosition = draftAt[paper.ID]
+		item.DraftPushed = draftPushedAt[paper.ID] > 0
 		item.DraftTier = draftExplanation.Tier
 		item.DraftSignals = draftSignals
 		item.DraftReason = draftExplanation.Reason
@@ -378,21 +393,21 @@ func Format(report Report) string {
 		}
 		fmt.Fprintf(&b, "筛选预览 %s  截止 %s  回看 %d 天\n", day.Date, day.Cutoff.Format(time.RFC3339), day.LookbackDays)
 		b.WriteString("不调用模型，不发送飞书，不写入日报或去重记录。\n")
-		fmt.Fprintf(&b, "当前入选 %d 篇；宽松基线 %d 篇；当日已保存 %d 篇。\n", len(day.Selected), len(day.Loose), len(day.Sent))
+		fmt.Fprintf(&b, "收集 %d 篇，将推送 %d 篇（上限 %d）；宽松基线 %d 篇；当日已保存 %d 篇。\n", len(day.Selected), len(day.Pushed), day.PushLimit, len(day.Loose), len(day.Sent))
 		if day.Draft != nil {
-			fmt.Fprintf(&b, "草稿入选 %d 篇。草稿规则不会写回配置。\n", len(day.Draft.Selected))
+			fmt.Fprintf(&b, "草稿收集 %d 篇，将推送 %d 篇。草稿规则不会写回配置。\n", len(day.Draft.Selected), len(day.Draft.Pushed))
 			if day.Draft.Score.Labeled == 0 {
-				b.WriteString("草稿已标注入选 0 篇，精确率暂无。\n")
+				b.WriteString("草稿已标注将推送 0 篇，精确率暂无。\n")
 			} else {
-				fmt.Fprintf(&b, "草稿已标注入选 %d 篇，其中相关 %d、不相关 %d，精确率 %.2f。\n", day.Draft.Score.Labeled, day.Draft.Score.Relevant, day.Draft.Score.NotRelevant, *day.Draft.Score.Precision)
+				fmt.Fprintf(&b, "草稿已标注将推送 %d 篇，其中相关 %d、不相关 %d，精确率 %.2f。\n", day.Draft.Score.Labeled, day.Draft.Score.Relevant, day.Draft.Score.NotRelevant, *day.Draft.Score.Precision)
 			}
 		}
 		if day.Score.Labeled == 0 {
-			b.WriteString("已标注入选 0 篇，精确率暂无。\n")
+			b.WriteString("已标注将推送 0 篇，精确率暂无。\n")
 		} else {
-			fmt.Fprintf(&b, "已标注入选 %d 篇，其中相关 %d、不相关 %d，精确率 %.2f。\n", day.Score.Labeled, day.Score.Relevant, day.Score.NotRelevant, *day.Score.Precision)
+			fmt.Fprintf(&b, "已标注将推送 %d 篇，其中相关 %d、不相关 %d，精确率 %.2f。\n", day.Score.Labeled, day.Score.Relevant, day.Score.NotRelevant, *day.Score.Precision)
 		}
-		b.WriteString("\n当前入选\n")
+		b.WriteString("\n收集到的论文\n")
 		if len(day.Selected) == 0 {
 			b.WriteString("（无）\n")
 		}
@@ -408,9 +423,11 @@ func Format(report Report) string {
 		}
 		b.WriteString("\n全部候选\n")
 		for _, item := range day.Candidates {
-			mark := "未入选"
-			if item.Selected {
-				mark = fmt.Sprintf("入选 #%d", item.Position)
+			mark := "未收集"
+			if item.Pushed {
+				mark = fmt.Sprintf("将推送 #%d", item.Position)
+			} else if item.Selected {
+				mark = fmt.Sprintf("收集 #%d，超出推送上限", item.Position)
 			}
 			fmt.Fprintf(&b, "- [%s][tier %d] %s\n", mark, item.Tier, item.Title)
 			fmt.Fprintf(&b, "  %s  %s\n", item.ID, item.URL)
@@ -418,9 +435,11 @@ func Format(report Report) string {
 			fmt.Fprintf(&b, "  信号：%s\n", strings.Join(item.Signals, ", "))
 			fmt.Fprintf(&b, "  原因：%s\n", reasonText(item.Reason))
 			if day.Draft != nil {
-				mark := "草稿未入选"
-				if item.DraftSelected {
-					mark = fmt.Sprintf("草稿入选 #%d", item.DraftPosition)
+				mark := "草稿未收集"
+				if item.DraftPushed {
+					mark = fmt.Sprintf("草稿将推送 #%d", item.DraftPosition)
+				} else if item.DraftSelected {
+					mark = fmt.Sprintf("草稿收集 #%d，超出推送上限", item.DraftPosition)
 				}
 				fmt.Fprintf(&b, "  草稿：[%s][tier %d] %s\n", mark, item.DraftTier, reasonText(item.DraftReason))
 			}
@@ -431,7 +450,11 @@ func Format(report Report) string {
 }
 
 func writeCandidate(b *strings.Builder, item Candidate) {
-	fmt.Fprintf(b, "%d. [tier %d] %s\n", item.Position, item.Tier, item.Title)
+	push := "超出推送上限"
+	if item.Pushed {
+		push = "将推送"
+	}
+	fmt.Fprintf(b, "%d. [%s][tier %d] %s\n", item.Position, push, item.Tier, item.Title)
 	fmt.Fprintf(b, "   %s  %s\n", item.ID, item.URL)
 	fmt.Fprintf(b, "   分类：%s\n", strings.Join(item.Categories, " "))
 	fmt.Fprintf(b, "   信号：%s\n", strings.Join(item.Signals, ", "))

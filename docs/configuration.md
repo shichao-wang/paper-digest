@@ -22,9 +22,9 @@
 
 ## 筛选规则
 
-`topics[].selection` 是可选对象。`recommendation-advertising-search` 省略它时使用程序内置的推荐、广告和搜索规则，行为与写明示例里的整段规则相同。其他主题省略它则没有筛选规则，筛选评估会拒绝该主题。写了 `selection` 就会在加载时编译：`max_papers` 为 1～20，`min_tier` 为 1～5，查询至少要有一个分类或检索词，正则必须能编译。错误会指出哪一条规则无效，但不会把正则原文打出来。
+`topics[].selection` 是可选对象。`recommendation-advertising-search` 省略它时使用程序内置的推荐、广告和搜索规则，行为与写明示例里的整段规则相同。其他主题省略它则没有筛选规则，筛选评估会拒绝该主题。写了 `selection` 就会在加载时编译：`max_papers` 为 1～20，`min_tier` 为 1～5，查询至少要有一个分类或检索词，正则必须能编译。错误会指出哪一条规则无效，但不会把正则原文打出来。没有单独的采集上限字段；已有配置里的 `max_papers` 仍然有效，含义是每天推送多少篇。
 
-规则在小写后的标题和摘要上匹配。`query.categories` 和 `query.terms`（`field` 为 `title` 或 `abstract`）组成 arXiv 的 `cat:` / `ti:` / `abs:` 查询，不用 `all:`。`masks` 先从文本里去掉指定短语，并可以作为排除信号。`signals` 用 `pattern`、`categories` 或 `near` 三者之一；`unless` 指向已经定义、且自身没有 `unless` 的信号。`decisions` 按顺序采用第一条满足条件的分档。低于 `min_tier` 的论文不入选。`SelectLoose` 仍是改规则之前的宽松基线，每天最多 5 篇，不受这里的 `max_papers` 影响。
+规则在小写后的标题和摘要上匹配。`query.categories` 和 `query.terms`（`field` 为 `title` 或 `abstract`）组成 arXiv 的 `cat:` / `ti:` / `abs:` 查询，不用 `all:`。采集会按该查询翻完 `arxiv.lookback_days` 窗口，页与页之间间隔 3 秒；最多 24 页只是防止无限翻页，窗口还没翻完就碰到这个上限时会报错，而不是悄悄截断。`masks` 先从文本里去掉指定短语，并可以作为排除信号。`signals` 用 `pattern`、`categories` 或 `near` 三者之一；`unless` 指向已经定义、且自身没有 `unless` 的信号。`decisions` 按顺序采用第一条满足条件的分档。低于 `min_tier` 的论文不收集。收集结果按相关度再按首次发布日期排序，不按篇数截断。`max_papers` 只决定排序后的前多少篇会生成摘要并写入当天日报。`SelectLoose` 仍是改规则之前的宽松基线，对照时仍最多 5 篇。
 
 草稿不写配置：`paper-digest eval --rules candidate.json`，或在「筛选评估」里编辑文本框后点「用草稿对照」。`paper-digest eval rules` 只打印当前主题的规则。确认后再把对象放进宿主机配置的 `topics[].selection`，执行 `docker compose up -d --force-recreate paper-digest`。容器只读挂载配置，这一步不构建镜像。
 

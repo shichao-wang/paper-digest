@@ -107,6 +107,42 @@ func TestBuildComparesCurrentLooseAndSentWithoutUsingLabelsOutsideSelection(t *t
 	}
 }
 
+func TestCollectedPapersStayVisibleAboveThePushCap(t *testing.T) {
+	cutoff, err := Cutoff("2026-10-09")
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := papers.DefaultSelection()
+	spec.MaxPapers = 2
+	rules, err := papers.Compile(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fetched := make([]papers.Paper, 4)
+	for i := range fetched {
+		fetched[i] = papers.Paper{
+			ID:        "arxiv:p" + string(rune('0'+i)),
+			Title:     "Web Search Ranking",
+			Published: cutoff.Add(-time.Duration(i+1) * time.Hour),
+			URL:       "https://arxiv.org/abs/example",
+		}
+	}
+	report, err := Build("recommendation-advertising-search", []string{"2026-10-09"}, 7, rules, nil, fetched, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	day := report.Days[0]
+	if len(day.Selected) != 4 || len(day.Pushed) != 2 || day.PushLimit != 2 || day.Score.Selected != 2 {
+		t.Fatalf("collected=%d pushed=%d limit=%d score=%+v", len(day.Selected), len(day.Pushed), day.PushLimit, day.Score)
+	}
+	if !day.Selected[0].Pushed || !day.Selected[1].Pushed || day.Selected[2].Pushed || day.Candidates[2].Pushed {
+		t.Fatalf("push flags = %#v", day.Selected)
+	}
+	if !strings.Contains(Format(report), "收集 4 篇，将推送 2 篇（上限 2）") || !strings.Contains(Format(report), "超出推送上限") {
+		t.Fatal(Format(report))
+	}
+}
+
 func TestFixturesSkipLabelsWithoutPaperText(t *testing.T) {
 	published := time.Date(2026, 10, 7, 17, 38, 35, 0, time.UTC)
 	paper := papers.Paper{ID: "arxiv:strong", Title: "Sequential Recommendation", Abstract: "session logs", Published: published, Categories: []string{"cs.IR"}}

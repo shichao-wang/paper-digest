@@ -13,12 +13,14 @@ interface EvalCandidate {
   reason: string
   selected: boolean
   position: number
+  pushed: boolean
   looseSelected: boolean
   loosePosition: number
   inDigest: boolean
   label: string
   draftSelected: boolean
   draftPosition: number
+  draftPushed: boolean
   draftTier: number
   draftSignals: string[]
   draftReason: string
@@ -26,6 +28,7 @@ interface EvalCandidate {
 
 interface DraftComparison {
   selected: EvalCandidate[]
+  pushed: EvalCandidate[]
   onlyDraft: string[]
   onlyActive: string[]
   score: EvalScore
@@ -43,6 +46,8 @@ interface EvalDay {
   date: string
   lookbackDays: number
   selected: EvalCandidate[]
+  pushed: EvalCandidate[]
+  pushLimit: number
   loose: EvalCandidate[]
   sent: { id: string; title: string }[]
   candidates: EvalCandidate[]
@@ -99,8 +104,9 @@ function withLabel(report: EvalReport, id: string, label: string): EvalReport {
     ...report,
     days: report.days.map(day => {
       const selected = day.selected.map(apply)
-      const draft = day.draft ? { ...day.draft, selected: day.draft.selected.map(apply), score: scoreOf(day.draft.selected.map(apply)) } : undefined
-      return { ...day, selected, loose: day.loose.map(apply), candidates: day.candidates.map(apply), draft, score: scoreOf(selected) }
+      const pushed = (day.pushed || []).map(apply)
+      const draft = day.draft ? { ...day.draft, selected: day.draft.selected.map(apply), pushed: (day.draft.pushed || []).map(apply), score: scoreOf((day.draft.pushed || []).map(apply)) } : undefined
+      return { ...day, selected, pushed, loose: day.loose.map(apply), candidates: day.candidates.map(apply), draft, score: scoreOf(pushed) }
     }),
   }
 }
@@ -233,7 +239,7 @@ export default function EvalReview({ topicID }: { topicID: string }) {
   }
 
   return <div className="eval-review">
-    <p className="eval-note">按当天北京时间 09:00 的截止时刻运行规则。不生成摘要，不发送飞书，不把论文标为已读，也不写入日报任务。草稿只用于这次对照，不会改 config.json。打开本页不会自动抓取。</p>
+    <p className="eval-note">按当天北京时间 09:00 的截止时刻收集窗口内全部合格论文，并标出每日推送上限内会生成摘要、发到飞书的那些。不生成摘要，不发送飞书，不把论文标为已读，也不写入日报任务。草稿只用于这次对照，不会改 config.json。打开本页不会自动抓取。</p>
     <div className="rules-editor">
       <label className="filter-field"><span>筛选规则 JSON</span><textarea value={rulesText} spellCheck={false} onChange={event => setRulesText(event.target.value)} aria-label="筛选规则 JSON" /></label>
       <div className="rules-actions">
@@ -252,13 +258,13 @@ export default function EvalReview({ topicID }: { topicID: string }) {
     {labelError && <p className="row-error" role="status">{labelError}</p>}
     {report?.days.map(day => <section key={day.date} className="eval-day">
       <div className="eval-score">
-        <strong>{day.date}</strong> 回看 {day.lookbackDays} 天。当前入选 {day.score.selected} 篇，宽松基线 {day.loose.length} 篇，当日已保存 {day.sent.length} 篇。
-        {day.score.labeled === 0 ? ' 已标注入选 0 篇，精确率暂无。' : ` 已标注入选 ${day.score.labeled} 篇，其中相关 ${day.score.relevant}、不相关 ${day.score.notRelevant}，精确率 ${day.score.precision?.toFixed(2)}。`}
-        {day.draft ? (day.draft.score.labeled === 0 ? ` 草稿入选 ${day.draft.score.selected} 篇，已标注 0 篇，精确率暂无。` : ` 草稿入选 ${day.draft.score.selected} 篇，已标注 ${day.draft.score.labeled} 篇，其中相关 ${day.draft.score.relevant}、不相关 ${day.draft.score.notRelevant}，精确率 ${day.draft.score.precision?.toFixed(2)}。`) : ''}
+        <strong>{day.date}</strong> 回看 {day.lookbackDays} 天。收集 {day.selected.length} 篇，将推送 {day.pushed.length} 篇（上限 {day.pushLimit}），宽松基线 {day.loose.length} 篇，当日已保存 {day.sent.length} 篇。
+        {day.score.labeled === 0 ? ' 已标注将推送 0 篇，精确率暂无。' : ` 已标注将推送 ${day.score.labeled} 篇，其中相关 ${day.score.relevant}、不相关 ${day.score.notRelevant}，精确率 ${day.score.precision?.toFixed(2)}。`}
+        {day.draft ? (day.draft.score.labeled === 0 ? ` 草稿收集 ${day.draft.selected.length} 篇，将推送 ${day.draft.pushed.length} 篇，已标注 0 篇，精确率暂无。` : ` 草稿收集 ${day.draft.selected.length} 篇，将推送 ${day.draft.pushed.length} 篇，已标注 ${day.draft.score.labeled} 篇，其中相关 ${day.draft.score.relevant}、不相关 ${day.draft.score.notRelevant}，精确率 ${day.draft.score.precision?.toFixed(2)}。`) : ''}
       </div>
-      <h3>当前入选</h3>
-      {day.selected.length === 0 ? <p className="eval-note">这一天没有入选论文。</p> : <ol className="eval-selected">{day.selected.map(item => <li key={item.id}><a href={arxivURL(item)} target="_blank" rel="noreferrer">{item.title}</a> <span className="eval-meta">#{item.position} · tier {item.tier} · {item.id}</span></li>)}</ol>}
-      {day.draft && <><h3>草稿入选</h3>{day.draft.selected.length === 0 ? <p className="eval-note">草稿没有入选论文。</p> : <ol className="eval-selected">{day.draft.selected.map(item => <li key={item.id}><a href={arxivURL(item)} target="_blank" rel="noreferrer">{item.title}</a> <span className="eval-meta">#{item.draftPosition} · tier {item.draftTier} · {item.id}</span></li>)}</ol>}</>}
+      <h3>收集到的论文</h3>
+      {day.selected.length === 0 ? <p className="eval-note">这一天没有收集到合格论文。</p> : <ol className="eval-selected">{day.selected.map(item => <li key={item.id}><a href={arxivURL(item)} target="_blank" rel="noreferrer">{item.title}</a> <span className="eval-meta">#{item.position} · tier {item.tier} · {item.pushed ? '将推送' : '超出推送上限'} · {item.id}</span></li>)}</ol>}
+      {day.draft && <><h3>草稿收集</h3>{day.draft.selected.length === 0 ? <p className="eval-note">草稿没有收集到论文。</p> : <ol className="eval-selected">{day.draft.selected.map(item => <li key={item.id}><a href={arxivURL(item)} target="_blank" rel="noreferrer">{item.title}</a> <span className="eval-meta">#{item.draftPosition} · tier {item.draftTier} · {item.draftPushed ? '将推送' : '超出推送上限'} · {item.id}</span></li>)}</ol>}</>}
       <div className="eval-diff">
         <section><h3>仅当前规则</h3>{idList(day, day.onlyCurrent)}</section>
         <section><h3>仅宽松基线</h3>{idList(day, day.onlyLoose)}</section>
@@ -268,11 +274,11 @@ export default function EvalReview({ topicID }: { topicID: string }) {
       </div>
       <h3>全部候选</h3>
       {day.candidates.map(item => <article className="eval-candidate" key={item.id}>
-        <header><h3><a href={arxivURL(item)} target="_blank" rel="noreferrer">{item.title}</a></h3><span className="eval-meta">{item.selected ? `入选 #${item.position}` : '未入选'} · tier {item.tier}</span></header>
+        <header><h3><a href={arxivURL(item)} target="_blank" rel="noreferrer">{item.title}</a></h3><span className="eval-meta">{item.pushed ? `将推送 #${item.position}` : item.selected ? `收集 #${item.position}，超出推送上限` : '未收集'} · tier {item.tier}</span></header>
         <p className="eval-meta">{item.id} · {(item.categories || []).join(' ') || '无分类'}{item.looseSelected ? ` · 宽松 #${item.loosePosition}` : ''}{item.inDigest ? ' · 当日已保存' : ''}</p>
         <p className="eval-meta">信号：{(item.signals || []).join(', ') || '无'}</p>
         <p className="eval-meta">原因：{reasonText(item.reason)}</p>
-        {day.draft && <p className="eval-meta">草稿：{item.draftSelected ? `入选 #${item.draftPosition}` : '未入选'} · tier {item.draftTier} · {reasonText(item.draftReason)}{(item.draftSignals || []).length ? ` · ${(item.draftSignals || []).join(', ')}` : ''}</p>}
+        {day.draft && <p className="eval-meta">草稿：{item.draftPushed ? `将推送 #${item.draftPosition}` : item.draftSelected ? `收集 #${item.draftPosition}，超出推送上限` : '未收集'} · tier {item.draftTier} · {reasonText(item.draftReason)}{(item.draftSignals || []).length ? ` · ${(item.draftSignals || []).join(', ')}` : ''}</p>}
         <div className="eval-actions">
           <button type="button" className="secondary" aria-pressed={item.label === 'relevant'} disabled={pendingID === item.id} onClick={() => label(item, 'relevant')}>相关</button>
           <button type="button" className="secondary" aria-pressed={item.label === 'not_relevant'} disabled={pendingID === item.id} onClick={() => label(item, 'not_relevant')}>不相关</button>

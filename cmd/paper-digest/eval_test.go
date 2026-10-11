@@ -178,7 +178,7 @@ func TestEvalDraftRulesDoNotRewriteConfigOrCreateJobs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(text, "草稿入选 0 篇") || !strings.Contains(text, "草稿规则不会写回配置") || !strings.Contains(text, "仅当前规则（草稿未入选）") || !strings.Contains(text, "arxiv:strong") {
+	if !strings.Contains(text, "草稿收集 0 篇，将推送 0 篇") || !strings.Contains(text, "草稿规则不会写回配置") || !strings.Contains(text, "仅当前规则（草稿未入选）") || !strings.Contains(text, "arxiv:strong") {
 		t.Fatalf("draft preview = %s", text)
 	}
 	after, err := os.ReadFile(configPath)

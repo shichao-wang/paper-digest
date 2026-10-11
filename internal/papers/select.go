@@ -24,10 +24,9 @@ const (
 )
 
 func Select(all []Paper, now time.Time, lookbackDays int, rules Rules, seen func(string) bool) []Paper {
-	if !rules.active || lookbackDays <= 0 || rules.maxPapers <= 0 {
+	if !rules.active || lookbackDays <= 0 {
 		return nil
 	}
-	max := rules.maxPapers
 	cutoff := now.Add(-time.Duration(lookbackDays) * 24 * time.Hour)
 
 	candidateByID := make(map[string]Paper, len(all))
@@ -68,10 +67,19 @@ func Select(all []Paper, now time.Time, lookbackDays int, rules Rules, seen func
 		}
 		return candidates[i].ID < candidates[j].ID
 	})
-	if len(candidates) > max {
-		candidates = candidates[:max]
-	}
 	return candidates
+}
+
+// ForPush is the prefix of a ranked collection that goes into the daily digest.
+// Collection itself is not shortened by this limit.
+func ForPush(collected []Paper, limit int) []Paper {
+	if limit <= 0 || len(collected) == 0 {
+		return nil
+	}
+	if len(collected) > limit {
+		return collected[:limit]
+	}
+	return collected
 }
 
 // Explanation is the topic decision for one paper: tier, the signals that fired,

@@ -237,6 +237,21 @@ func TestFetchSinceStopsOnShortPageAndCancel(t *testing.T) {
 	})
 }
 
+func TestFetchSinceRefusesToTruncateAnOpenWindow(t *testing.T) {
+	useFetchPaging(t, 1, 2, 0)
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		id := fmt.Sprintf("2401.0000%d", calls)
+		fmt.Fprintf(w, `<feed xmlns="http://www.w3.org/2005/Atom">%s</feed>`, atomEntryXML(id, "2026-10-08T00:00:00Z", "", "Still inside"))
+	}))
+	defer server.Close()
+	_, err := FetchSince(context.Background(), server.Client(), server.URL, time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), DefaultRules().Query)
+	if err == nil || !strings.Contains(err.Error(), "refusing to drop") || calls != 2 {
+		t.Fatalf("err = %v, calls = %d", err, calls)
+	}
+}
+
 func TestSelectFiltersAndCapsResults(t *testing.T) {
 	now := time.Date(2026, time.September, 27, 12, 0, 0, 0, time.UTC)
 	papers := []Paper{
@@ -259,11 +274,12 @@ func TestSelectFiltersAndCapsResults(t *testing.T) {
 	}
 
 	got := Select(papers, now, 7, DefaultRules(), seen)
-	if len(got) != maxDailyPapers {
-		t.Fatalf("Select() returned %d papers, want cap %d", len(got), maxDailyPapers)
+	if len(got) != 7 {
+		t.Fatalf("Select() returned %d papers, want all 7 qualifying papers", len(got))
 	}
-	if got[0].ID != "recent-a" || got[1].ID != "recent-b" {
-		t.Errorf("selected order starts with %q, %q", got[0].ID, got[1].ID)
+	pushed := ForPush(got, maxDailyPapers)
+	if len(pushed) != maxDailyPapers || pushed[0].ID != "recent-a" || pushed[1].ID != "recent-b" {
+		t.Errorf("push order starts with %q, %q", pushed[0].ID, pushed[1].ID)
 	}
 	if !got[0].Published.Equal(now.Add(-30 * time.Minute)) {
 		t.Errorf("duplicate ID did not keep newest version: published %s", got[0].Published)

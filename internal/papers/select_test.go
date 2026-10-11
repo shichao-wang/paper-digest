@@ -192,15 +192,21 @@ func TestNewerOffTopicPapersDoNotCrowdOutOlderMatches(t *testing.T) {
 	})
 	want := positive[:maxDailyPapers]
 	got := Select(all, now, 7, DefaultRules(), nil)
-	if len(got) != len(want) {
-		t.Fatalf("Select() returned %d papers, want %d", len(got), len(want))
+	if len(got) != len(positive) {
+		t.Fatalf("Select() returned %d papers, want all %d positives", len(got), len(positive))
 	}
-	for i, paper := range got {
+	for _, paper := range got {
 		if negative[paper.ID] {
-			t.Fatalf("selected off-topic paper %s", paper.ID)
+			t.Fatalf("collected off-topic paper %s", paper.ID)
 		}
+	}
+	pushed := ForPush(got, maxDailyPapers)
+	if len(pushed) != len(want) {
+		t.Fatalf("ForPush() returned %d papers, want %d", len(pushed), len(want))
+	}
+	for i, paper := range pushed {
 		if paper.ID != want[i].ID {
-			t.Fatalf("position %d = %s, want %s", i, paper.ID, want[i].ID)
+			t.Fatalf("push position %d = %s, want %s", i, paper.ID, want[i].ID)
 		}
 	}
 }

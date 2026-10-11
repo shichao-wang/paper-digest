@@ -58,11 +58,13 @@ func (r *Runner) Generate(ctx context.Context, date string) error {
 			}
 			return yes
 		}
-		selected := papers.Select(all, r.Now(), r.LookbackDays, r.Rules, seen)
+		collected := papers.Select(all, r.Now(), r.LookbackDays, r.Rules, seen)
 		if seenErr != nil {
 			return seenErr
 		}
-		if err := r.Store.SaveCandidates(ctx, Topic, date, selected); err != nil {
+		// Summaries run only for the papers that will be pushed. The lookback
+		// window can contain more qualifying papers than the daily digest holds.
+		if err := r.Store.SaveCandidates(ctx, Topic, date, papers.ForPush(collected, r.Rules.MaxPapers())); err != nil {
 			return err
 		}
 	}

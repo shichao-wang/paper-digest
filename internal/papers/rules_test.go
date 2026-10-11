@@ -56,11 +56,15 @@ func TestSelectHonorsConfiguredMaxPapers(t *testing.T) {
 			Published: now.Add(-time.Duration(i+1) * time.Hour),
 		})
 	}
-	if got := Select(papers, now, 7, DefaultRules(), nil); len(got) != maxDailyPapers {
-		t.Fatalf("default cap = %d, want %d", len(got), maxDailyPapers)
+	got := Select(papers, now, 7, DefaultRules(), nil)
+	if len(got) != 6 {
+		t.Fatalf("collected = %d, want all 6 qualifying papers", len(got))
 	}
-	if got := Select(papers, now, 7, rules, nil); len(got) != 6 {
-		t.Fatalf("configured cap = %d, want 6", len(got))
+	if pushed := ForPush(got, DefaultRules().MaxPapers()); len(pushed) != maxDailyPapers {
+		t.Fatalf("default push = %d, want %d", len(pushed), maxDailyPapers)
+	}
+	if pushed := ForPush(got, rules.MaxPapers()); len(pushed) != 6 {
+		t.Fatalf("configured push = %d, want 6", len(pushed))
 	}
 	if Select(papers, now, 7, Rules{}, nil) != nil {
 		t.Fatal("inactive rules selected papers")
