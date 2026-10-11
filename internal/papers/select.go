@@ -68,6 +68,24 @@ func Select(all []Paper, window Window, rules Rules, seen func(string) bool) []P
 	return candidates
 }
 
+// RankRelevant keeps papers that appear in scores, highest score first.
+// Equal scores keep the incoming order, which is the coarse ranking.
+func RankRelevant(collected []Paper, scores map[string]float64) []Paper {
+	if len(collected) == 0 || len(scores) == 0 {
+		return nil
+	}
+	ranked := make([]Paper, 0, len(scores))
+	for _, paper := range collected {
+		if _, ok := scores[paper.ID]; ok {
+			ranked = append(ranked, paper)
+		}
+	}
+	sort.SliceStable(ranked, func(i, j int) bool {
+		return scores[ranked[i].ID] > scores[ranked[j].ID]
+	})
+	return ranked
+}
+
 // ForPush is the prefix of a ranked collection that goes into the daily digest.
 // Collection itself is not shortened by this limit.
 func ForPush(collected []Paper, limit int) []Paper {

@@ -196,9 +196,10 @@ export default function App() {
             {!selectedDigest && !digests.loading && <Message title="选择一份日报">查看当天的论文与中文要点。</Message>}
             {digestDetail.data && <article className="digest-detail"><div className="detail-meta"><span>北京时间</span><Status value={digestDetail.data.status} /></div><h2>{digestDetail.data.date} 日报</h2><p className="digest-intro">{digestDetail.data.paperCount} 篇入选，{digestDetail.data.summaryCount} 篇已有中文要点</p>
               {digestDetail.data.status === 'unknown' && <p className="notice">发送结果尚未确认。请在飞书群核对送达情况。</p>}
+              {digestDetail.data.status === 'missed' && <p className="notice">{digestDetail.data.message || '没有留下未发送原因。'}</p>}
               {digestDetail.data.items.length === 0 && <p className="summary-missing">当天没有保存的入选论文。</p>}
               <div className="digest-papers">{digestDetail.data.items.map(paper => <button key={paper.id} onClick={() => { navigate({ view: null, date: paper.digestDate, q: null, summary: null, page: null, digest: null, paper: paper.id, paperDate: paper.digestDate }); detailRef.current?.scrollTo(0, 0) }}><h3 className="paper-title">{paper.title}</h3><p>{paper.summary ? '阅读中文要点与原始摘要' : '阅读原始摘要'}</p></button>)}</div>
-              <section className="digest-message"><h3>日报正文</h3>{digestDetail.data.message ? <div className="summary-text">{digestDetail.data.message}</div> : <p className="summary-missing">暂无完整日报正文。</p>}</section>
+              <section className="digest-message"><h3>{digestDetail.data.status === 'missed' ? '未发送原因' : '日报正文'}</h3>{digestDetail.data.message ? <div className="summary-text">{digestDetail.data.message}</div> : <p className="summary-missing">{digestDetail.data.status === 'missed' ? '没有留下未发送原因。' : '暂无完整日报正文。'}</p>}</section>
             </article>}
           </> : <>
             {explicitPaper && !paperDetail.data && <button className="mobile-back" onClick={back}>‹ 返回论文列表</button>}

@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/shichao-wang/paper-digest/internal/papers"
+	"github.com/shichao-wang/paper-digest/skills"
 )
 
 var topicIDPattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
@@ -24,7 +25,15 @@ type Topic struct {
 	ID         string            `json:"id"`
 	WebhookURL string            `json:"webhook_url"`
 	Selection  *papers.Selection `json:"selection,omitempty"`
+	Skills     *TopicSkills      `json:"skills,omitempty"`
 	rules      papers.Rules      `json:"-"`
+}
+
+// TopicSkills names the screening and summary skills for one topic.
+// Empty names use paper-screening and paper-summary.
+type TopicSkills struct {
+	Screening string `json:"screening,omitempty"`
+	Summary   string `json:"summary,omitempty"`
 }
 
 type Config struct {
@@ -39,6 +48,9 @@ type Config struct {
 		Model   string `json:"model"`
 		BaseURL string `json:"base_url"`
 	} `json:"anthropic"`
+	Skills struct {
+		Dir string `json:"dir,omitempty"`
+	} `json:"skills,omitempty"`
 	Topics []Topic `json:"topics"`
 }
 
@@ -76,6 +88,13 @@ func Load(path string) (Config, error) {
 			return Config{}, errors.New("主题 ID 重复")
 		}
 		seen[topic.ID] = true
+		if topic.Skills != nil {
+			topic.Skills.Screening = strings.TrimSpace(topic.Skills.Screening)
+			topic.Skills.Summary = strings.TrimSpace(topic.Skills.Summary)
+			if (topic.Skills.Screening != "" && !topicIDPattern.MatchString(topic.Skills.Screening)) || (topic.Skills.Summary != "" && !topicIDPattern.MatchString(topic.Skills.Summary)) {
+				return Config{}, errors.New("技能名称只能使用小写字母、数字与连字符")
+			}
+		}
 	}
 	if baseURL := strings.TrimSpace(cfg.Anthropic.BaseURL); baseURL != "" {
 		parsed, err := url.Parse(baseURL)
@@ -84,6 +103,7 @@ func Load(path string) (Config, error) {
 		}
 		cfg.Anthropic.BaseURL = baseURL
 	}
+	cfg.Skills.Dir = strings.TrimSpace(cfg.Skills.Dir)
 	for i := range cfg.Topics {
 		topic := &cfg.Topics[i]
 		if topic.Selection == nil {
@@ -124,6 +144,37 @@ func (c Config) TopicSelection(id string) (papers.Rules, papers.Selection, bool)
 		return papers.Rules{}, papers.Selection{}, false
 	}
 	return papers.Rules{}, papers.Selection{}, false
+}
+
+// SkillNames returns the screening and summary skill names for a topic.
+func (c Config) SkillNames(id string) (string, string) {
+	screening, summary := skills.Screening, skills.Summary
+	for _, topic := range c.Topics {
+		if topic.ID != id || topic.Skills == nil {
+			continue
+		}
+		if topic.Skills.Screening != "" {
+			screening = topic.Skills.Screening
+		}
+		if topic.Skills.Summary != "" {
+			summary = topic.Skills.Summary
+		}
+	}
+	return screening, summary
+}
+
+// ResolveSkills checks that every topic's skills can be loaded.
+func (c Config) ResolveSkills(set skills.Set) error {
+	for _, topic := range c.Topics {
+		screening, summary := c.SkillNames(topic.ID)
+		if _, err := set.Get(screening); err != nil {
+			return fmt.Errorf("主题 %s 的精筛技能无效: %w", topic.ID, err)
+		}
+		if _, err := set.Get(summary); err != nil {
+			return fmt.Errorf("主题 %s 的摘要技能无效: %w", topic.ID, err)
+		}
+	}
+	return nil
 }
 
 func (c Config) Webhook(topicID string) (string, error) {

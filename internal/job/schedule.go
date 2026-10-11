@@ -2,6 +2,7 @@ package job
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -40,7 +41,9 @@ func (r *Runner) serve(ctx context.Context, logger *slog.Logger, ticks <-chan ti
 					deadline := time.Date(now.Year(), now.Month(), now.Day(), 9, 0, 0, 0, beijing())
 					workCtx, cancel := context.WithDeadline(ctx, deadline)
 					defer cancel()
-					if err := r.Generate(workCtx, date); err != nil && workCtx.Err() == nil {
+					if err := r.Generate(workCtx, date); err != nil && errors.Is(err, errScreeningClosed) {
+						logger.Error("精筛失败，当天不发送", "date", date, "error", err)
+					} else if err != nil && workCtx.Err() == nil {
 						logger.Error("日报生成未完成，稍后重试", "date", date, "error", err)
 					}
 				}()

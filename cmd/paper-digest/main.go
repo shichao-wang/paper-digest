@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -25,6 +26,7 @@ import (
 	"github.com/shichao-wang/paper-digest/internal/papers"
 	"github.com/shichao-wang/paper-digest/internal/state"
 	"github.com/shichao-wang/paper-digest/internal/web"
+	"github.com/shichao-wang/paper-digest/skills"
 )
 
 func main() {
@@ -187,13 +189,29 @@ type serveDependencies struct {
 }
 
 func defaultWorker(cfg config.Config, store *state.Store) (worker, error) {
-	model := cfg.Anthropic.Model
+	model := strings.TrimSpace(cfg.Anthropic.Model)
 	if model == "" {
-		model = "claude-opus-5"
+		model = digest.DefaultModel
 	}
 	rules, _, ok := cfg.TopicSelection(job.Topic)
 	if !ok {
 		return nil, errors.New("主题 recommendation-advertising-search 没有筛选规则")
+	}
+	loaded, err := skills.Load(cfg.Skills.Dir)
+	if err != nil {
+		return nil, err
+	}
+	if err := cfg.ResolveSkills(loaded); err != nil {
+		return nil, err
+	}
+	screeningName, summaryName := cfg.SkillNames(job.Topic)
+	screeningSkill, err := loaded.Get(screeningName)
+	if err != nil {
+		return nil, err
+	}
+	summarySkill, err := loaded.Get(summaryName)
+	if err != nil {
+		return nil, err
 	}
 	return &job.Runner{
 		Store: store,
@@ -202,8 +220,15 @@ func defaultWorker(cfg config.Config, store *state.Store) (worker, error) {
 			defer cancel()
 			return papers.FetchWindow(fetchCtx, &http.Client{Timeout: 45 * time.Second}, "", batch.Window, rules.Query)
 		},
-		Analyzer: digest.ClaudeAnalyzer{Model: model, APIKey: cfg.Anthropic.APIKey, BaseURL: cfg.Anthropic.BaseURL},
-		Sender:   delivery.StoredFeishu{Store: store, Topic: job.Topic}, Now: time.Now,
+		Analyzer: digest.ClaudeAnalyzer{
+			Model: model, APIKey: cfg.Anthropic.APIKey, BaseURL: cfg.Anthropic.BaseURL,
+			Instruction: summarySkill.Body, Version: summarySkill.Version(),
+		},
+		Screen: digest.Screener{
+			Model: model, APIKey: cfg.Anthropic.APIKey, BaseURL: cfg.Anthropic.BaseURL,
+			Instruction: screeningSkill.Body, Skill: screeningSkill.Version(),
+		},
+		Sender: delivery.StoredFeishu{Store: store, Topic: job.Topic}, Now: time.Now,
 		Rules: rules,
 	}, nil
 }
@@ -255,6 +280,26 @@ func serve(parent context.Context, cfg config.Config, options serveOptions, deps
 			return err
 		}
 	}
+	loaded, err := skills.Load(cfg.Skills.Dir)
+	if err != nil {
+		return err
+	}
+	if err := cfg.ResolveSkills(loaded); err != nil {
+		return err
+	}
+	screeningSkills := map[string]skills.Skill{}
+	for _, topic := range cfg.Topics {
+		name, _ := cfg.SkillNames(topic.ID)
+		skill, err := loaded.Get(name)
+		if err != nil {
+			return err
+		}
+		screeningSkills[topic.ID] = skill
+	}
+	model := strings.TrimSpace(cfg.Anthropic.Model)
+	if model == "" {
+		model = digest.DefaultModel
+	}
 	store, err := openStore(parent, cfg)
 	if err != nil {
 		return err
@@ -269,6 +314,13 @@ func serve(parent context.Context, cfg config.Config, options serveOptions, deps
 		Topics:          cfg.Topics,
 		Rules:           selectionRules(cfg),
 		Selections:      selectionSpecs(cfg),
+		ScreeningSkills: screeningSkills,
+		Screen: func(ctx context.Context, instruction string, list []papers.Paper) ([]digest.Decision, error) {
+			return (digest.Screener{
+				Model: model, APIKey: cfg.Anthropic.APIKey, BaseURL: cfg.Anthropic.BaseURL,
+				Instruction: instruction,
+			}).Screen(ctx, list)
+		},
 		Fetch: func(ctx context.Context, window papers.Window, searchQuery string) ([]papers.Paper, error) {
 			return papers.FetchWindow(ctx, &http.Client{Timeout: 45 * time.Second}, "", window, searchQuery)
 		},

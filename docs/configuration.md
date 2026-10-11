@@ -11,11 +11,13 @@
 | `database.path` | Compose：`/data/digest.db`；本地：`data/local/digest.db` | 打开数据库时要求非空；相对路径基于进程工作目录，父目录必须先创建 |
 | `delivery.enabled` | 示例为 `false` | 控制整个采集、模型生成与推送 worker；关闭时仍提供页面与 API |
 | `anthropic.api_key` | 空字符串 | 启用 worker 时必须非空；从配置读取 |
-| `anthropic.model` | 示例及代码回退为 `claude-opus-5` | 按所用服务实际支持的模型填写；仓库示例不保证服务端可用性 |
-| `anthropic.base_url` | 空字符串 | 使用 SDK 默认地址；自定义地址要求 HTTP/HTTPS、无 URL 凭据、查询参数或片段 |
+| `anthropic.model` | 示例为 `deepseek-flash`；配置留空时代码回退为 `deepseek-flash` | 按所用服务实际支持的模型填写。已写明的模型名会照用，不会被示例改掉 |
+| `anthropic.base_url` | 示例为 `https://api.deepseek.com/anthropic` | 兼容 Anthropic Messages API 的服务根地址，不要额外加 `/v1`。留空则使用默认 Anthropic API。自定义地址要求 HTTP/HTTPS、无 URL 凭据、查询参数或片段 |
+| `skills.dir` | 示例为 `/app/skills`，可省略 | 省略时只用程序内嵌的技能。填写时该目录必须存在，其中合法的 `技能名/SKILL.md` 会覆盖同名内嵌技能；文件无效则拒绝启动 |
 | `topics[].id` | `recommendation-advertising-search` | 至少一个，唯一，以小写字母开头，后续用小写字母、数字和分隔用连字符 |
 | `topics[].webhook_url` | 新配置省略 | 仅用于旧配置迁移；新地址通过页面保存到 SQLite |
 | `topics[].selection` | 联合主题省略时使用内置规则 | 该主题的 arXiv 查询、屏蔽、信号、分档和每日上限。见下文 |
+| `topics[].skills` | 可省略 | `screening` 与 `summary` 默认是 `paper-screening`、`paper-summary` |
 
 使用 [Compose 示例](../config/config.example.json) 或 [宿主机示例](../config/config.local.example.json)；对应的实际配置 `config/config.json`、`config/config.local.json` 均被 Git 和 Docker 构建忽略。配置没有热加载，Webhook 通过数据库动态读取。直接运行 CLI 默认读取工作目录下的 `config/config.json`，其他路径在子命令前指定 `--config <文件>`；`health` 和 `preview` 不读取配置。`eval` 读取数据库路径和主题的 `selection`。没有 `selection` 的旧配置仍能加载。配置里不能再写 `arxiv` 或 `lookback_days`，见下方迁移。
 
@@ -23,9 +25,19 @@
 
 `topics[].selection` 是可选对象。`recommendation-advertising-search` 省略它时使用程序内置的推荐、广告和搜索规则，行为与写明示例里的整段规则相同。其他主题省略它则没有筛选规则，筛选评估会拒绝该主题。写了 `selection` 就会在加载时编译：`max_papers` 为 1～20，`min_tier` 为 1～5，查询至少要有一个分类或检索词，正则必须能编译。错误会指出哪一条规则无效，但不会把正则原文打出来。没有单独的采集上限字段；`max_papers` 的含义是每天推送多少篇。
 
-规则在小写后的标题和摘要上匹配。`query.categories` 和 `query.terms`（`field` 为 `title` 或 `abstract`）组成 arXiv 的 `cat:` / `ti:` / `abs:` 查询，不用 `all:`。采集再并上该公告日的 `submittedDate`。页与页之间间隔 3 秒；最多 5 页只是防止这一天无限翻页，窗口还没翻完就碰到这个上限时会报错，而不是悄悄截断。`masks` 先从文本里去掉指定短语，并可以作为排除信号。`signals` 用 `pattern`、`categories` 或 `near` 三者之一；`unless` 指向已经定义、且自身没有 `unless` 的信号。`decisions` 按顺序采用第一条满足条件的分档。低于 `min_tier` 的论文不收集。收集结果按相关度再按首次发布日期排序，不按篇数截断。`max_papers` 只决定排序后的前多少篇会生成摘要并写入当天日报。`SelectLoose` 仍是改规则之前的宽松基线，对照时仍最多 5 篇。
+规则在小写后的标题和摘要上匹配。`query.categories` 和 `query.terms`（`field` 为 `title` 或 `abstract`）组成 arXiv 的 `cat:` / `ti:` / `abs:` 查询，不用 `all:`。采集再并上该公告日的 `submittedDate`。页与页之间间隔 3 秒；最多 5 页只是防止这一天无限翻页，窗口还没翻完就碰到这个上限时会报错，而不是悄悄截断。`masks` 先从文本里去掉指定短语，并可以作为排除信号。`signals` 用 `pattern`、`categories` 或 `near` 三者之一；`unless` 指向已经定义、且自身没有 `unless` 的信号。`decisions` 按顺序采用第一条满足条件的分档。低于 `min_tier` 的论文不收集。收集结果按相关度再按首次发布日期排序，不按篇数截断。精筛之后才按模型分数重排，`max_papers` 只决定这个序列的前多少篇会生成摘要并写入当天日报。`SelectLoose` 仍是改规则之前的宽松基线，对照时仍最多 5 篇。
 
 草稿不写配置：`paper-digest eval --rules candidate.json`，或在「筛选评估」里编辑文本框后点「用草稿对照」。`paper-digest eval rules` 只打印当前主题的规则。确认后再把对象放进宿主机配置的 `topics[].selection`，执行 `docker compose up -d --force-recreate paper-digest`。容器只读挂载配置，这一步不构建镜像。
+
+## 精筛和摘要技能
+
+模型面对的说明在 `skills/paper-screening/SKILL.md` 和 `skills/paper-summary/SKILL.md`。每份都是 Agent Skill：YAML 前言含 `name` 和 `description`，后面是 Markdown 说明。`name` 必须和文件夹名一致。摘要技能决定中文要点怎么写，飞书卡片仍使用 `- **标签**：正文`。精筛技能决定粗筛候选里哪些真正相关；输出必须是严格 JSON，运行时会再校验。
+
+`skills.dir` 留空时使用编进二进制的这两份。要改完即生效、又不重建镜像，把目录设成挂载路径。Compose 示例把仓库的 `./skills` 只读挂到 `/app/skills`，示例配置的 `skills.dir` 就是这个路径。宿主机直接运行可以用 `"dir": "skills"`。目录里没有某个技能时仍用内嵌副本；目录里的 `SKILL.md` 无效，或者 `name` 和文件夹不一致，进程会报错退出，不会悄悄退回内嵌文件。`topics[].skills.screening` 和 `topics[].skills.summary` 可选，默认就是上面两个名字。
+
+精筛失败没有开关：重试耗尽、或生成截止（北京时间 09:00）到达时，当天不发送粗筛结果，任务记为 `missed`，原因出现在 `status`、日报历史和筛选评估里。关掉进程导致的取消不会记成 missed。
+
+评估默认不调用模型。`paper-digest eval --date YYYY-MM-DD --screen` 才会精筛，并可以加 `--skill 草稿.md` 试用一份未保存的技能。页面上对应的是「调用模型精筛」和技能文本框。这两种都只显示结果，不写数据库，也不发送。
 
 ## 删掉 lookback_days
 
@@ -51,7 +63,7 @@ docker compose up -d --force-recreate paper-digest
 
 ## 模型网关
 
-使用兼容 Anthropic Messages API 的本地网关时，将 `anthropic.base_url` 填为服务根地址（不额外添加 `/v1`），并配置网关的密钥和模型名称。宿主机直接运行 CLI 可用 `http://127.0.0.1:3425`；Docker Desktop 容器应使用 `http://host.docker.internal:3425` 访问宿主机。`base_url` 留空时使用默认 Anthropic API 地址。配置后仍保持 `delivery.enabled=false`，直至完成飞书试发和投递确认。
+使用兼容 Anthropic Messages API 的服务时，将 `anthropic.base_url` 填为服务根地址（不额外添加 `/v1`），并配置密钥和模型名称。示例指向 DeepSeek 的 Anthropic 兼容地址和 `deepseek-flash`。请求会开启思考，`budget_tokens` 为 2048，`max_tokens` 为 4096。宿主机直接运行 CLI 若走本地网关，可用 `http://127.0.0.1:3425`；Docker Desktop 容器应使用 `http://host.docker.internal:3425` 访问宿主机。`base_url` 留空时使用默认 Anthropic API 地址。配置后仍保持 `delivery.enabled=false`，直至完成飞书试发和投递确认。
 
 ## 旧环境变量迁移与重载
 

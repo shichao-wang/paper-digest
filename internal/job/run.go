@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/shichao-wang/paper-digest/internal/delivery"
@@ -14,13 +15,20 @@ import (
 
 const Topic = "recommendation-advertising-search"
 
+// errScreeningClosed marks a day that must not be sent. The scheduler logs it
+// once; the next Generate sees status missed and does not try again.
+var errScreeningClosed = errors.New("screening closed")
+
 type Runner struct {
 	Store    *state.Store
 	Fetch    func(context.Context, papers.Batch) ([]papers.Paper, error)
 	Analyzer digest.Analyzer
-	Sender   delivery.Sender
-	Now      func() time.Time
-	Rules    papers.Rules
+	Screen   interface {
+		Screen(context.Context, []papers.Paper) ([]digest.Decision, error)
+	}
+	Sender delivery.Sender
+	Now    func() time.Time
+	Rules  papers.Rules
 }
 
 func BeijingDate(now time.Time) string {
@@ -71,8 +79,11 @@ func (r *Runner) Generate(ctx context.Context, date string) error {
 				return seenErr
 			}
 		}
-		// Summaries run only for the papers that will be pushed.
-		if err := r.Store.SaveCandidates(ctx, Topic, date, papers.ForPush(collected, r.Rules.MaxPapers())); err != nil {
+		pushed, verdicts, err := r.screen(ctx, date, collected)
+		if err != nil {
+			return err
+		}
+		if err := r.Store.SaveScreened(ctx, Topic, date, pushed, verdicts); err != nil {
 			return err
 		}
 	}
@@ -103,6 +114,66 @@ func (r *Runner) Generate(ctx context.Context, date string) error {
 		return err
 	}
 	return r.Store.Ready(ctx, Topic, date, digest.Render(day, completed))
+}
+
+// screen ranks the coarse list. No candidates means no model call.
+// A model failure after retries marks the day missed and sends nothing.
+// Process shutdown (context.Canceled) leaves the day new so it can resume.
+func (r *Runner) screen(ctx context.Context, date string, collected []papers.Paper) ([]papers.Paper, []state.Screening, error) {
+	if len(collected) == 0 {
+		return nil, nil, nil
+	}
+	if r.Screen == nil {
+		return nil, nil, r.failScreening(ctx, date, errors.New("精筛未配置"))
+	}
+	decisions, err := r.Screen.Screen(ctx, collected)
+	if err != nil {
+		if errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			return nil, nil, err
+		}
+		return nil, nil, r.failScreening(ctx, date, err)
+	}
+	scores := make(map[string]float64, len(decisions))
+	verdicts := make([]state.Screening, 0, len(decisions))
+	seen := make(map[string]bool, len(decisions))
+	for _, decision := range decisions {
+		if decision.ID == "" || seen[decision.ID] {
+			return nil, nil, r.failScreening(ctx, date, fmt.Errorf("精筛结果无法对应论文 %s", decision.ID))
+		}
+		seen[decision.ID] = true
+		if decision.Relevant {
+			scores[decision.ID] = decision.Score
+		}
+		verdicts = append(verdicts, state.Screening{
+			PaperID: decision.ID, Relevant: decision.Relevant, Score: decision.Score,
+			Reason: decision.Reason, Skill: decision.Skill,
+		})
+	}
+	for _, paper := range collected {
+		if !seen[paper.ID] {
+			return nil, nil, r.failScreening(ctx, date, fmt.Errorf("精筛结果缺少 %s", paper.ID))
+		}
+	}
+	return papers.ForPush(papers.RankRelevant(collected, scores), r.Rules.MaxPapers()), verdicts, nil
+}
+
+func (r *Runner) failScreening(ctx context.Context, date string, cause error) error {
+	reason := screeningReason(cause)
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if err := r.Store.MarkMissedWithReason(writeCtx, Topic, date, reason); err != nil {
+		return fmt.Errorf("%s；记录错过发送也失败: %w", reason, err)
+	}
+	return fmt.Errorf("%s: %w", reason, errScreeningClosed)
+}
+
+func screeningReason(cause error) string {
+	text := strings.TrimSpace(cause.Error())
+	text = strings.Join(strings.Fields(text), " ")
+	if runes := []rune(text); len(runes) > 400 {
+		text = string(runes[:400]) + "…"
+	}
+	return "精筛失败，当天不发送：" + text
 }
 
 func (r *Runner) Deliver(ctx context.Context, date string) error {

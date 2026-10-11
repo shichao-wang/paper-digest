@@ -14,13 +14,15 @@ import (
 	"time"
 
 	"github.com/shichao-wang/paper-digest/internal/config"
+	"github.com/shichao-wang/paper-digest/internal/digest"
 	"github.com/shichao-wang/paper-digest/internal/eval"
 	"github.com/shichao-wang/paper-digest/internal/job"
 	"github.com/shichao-wang/paper-digest/internal/papers"
 	"github.com/shichao-wang/paper-digest/internal/state"
+	"github.com/shichao-wang/paper-digest/skills"
 )
 
-const evalUsage = "用法: paper-digest eval --date YYYY-MM-DD [--to YYYY-MM-DD] [--rules candidate.json] [--input papers.json] [--json]\n      --date 和 --to 是北京时间日报日期，含首尾，最多 14 天。每一天只预览对应的一个 arXiv 公告日；周日和周一没有新公告。\n      paper-digest eval rules [--topic id]\n      paper-digest eval label --id <arxiv id> --label relevant|not-relevant|clear [--input papers.json]\n      paper-digest eval fixtures"
+const evalUsage = "用法: paper-digest eval --date YYYY-MM-DD [--to YYYY-MM-DD] [--rules candidate.json] [--input papers.json] [--screen] [--skill SKILL.md] [--json]\n      --date 和 --to 是北京时间日报日期，含首尾，最多 14 天。每一天只预览对应的一个 arXiv 公告日；周日和周一没有新公告。\n      --screen 会调用模型做精筛并产生费用；不加它只显示已经保存的精筛结论。--skill 是草稿精筛技能，必须和 --screen 一起用，不会写回文件。\n      paper-digest eval rules [--topic id]\n      paper-digest eval label --id <arxiv id> --label relevant|not-relevant|clear [--input papers.json]\n      paper-digest eval fixtures"
 
 var fetchEvalPapers = func(ctx context.Context, window papers.Window, searchQuery string) ([]papers.Paper, error) {
 	fetchCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
@@ -49,8 +51,10 @@ func runEvalPreview(ctx context.Context, cfg config.Config, args []string) error
 	input := flags.String("input", "", "")
 	rulesPath := flags.String("rules", "", "")
 	asJSON := flags.Bool("json", false, "")
+	screen := flags.Bool("screen", false, "")
+	skillPath := flags.String("skill", "", "")
 	topicFlag := flags.String("topic", job.Topic, "")
-	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || *date == "" {
+	if err := flags.Parse(args); err != nil || flags.NArg() != 0 || *date == "" || (*skillPath != "" && !*screen) {
 		return errors.New(evalUsage)
 	}
 	topic, active, _, err := topicRules(cfg, *topicFlag)
@@ -100,11 +104,17 @@ func runEvalPreview(ctx context.Context, cfg config.Config, args []string) error
 		return err
 	}
 	defer store.Close()
-	labels, sent, err := loadEvalContext(ctx, store, topic, dates)
+	labels, sent, notes, err := loadEvalContext(ctx, store, topic, dates)
 	if err != nil {
 		return err
 	}
-	report, err := eval.Build(topic, dates, active, draft, fetched, sent, labels)
+	if *screen {
+		notes, err = screenEval(ctx, cfg, topic, dates, active, draft, fetched, notes, *skillPath)
+		if err != nil {
+			return err
+		}
+	}
+	report, err := eval.Build(topic, dates, active, draft, fetched, sent, labels, notes)
 	if err != nil {
 		return err
 	}
@@ -248,28 +258,107 @@ func openEvalStore(cfg config.Config) (*state.Store, error) {
 	return state.Open(path)
 }
 
-func loadEvalContext(ctx context.Context, store *state.Store, topic string, dates []string) (map[string]string, map[string][]eval.SentPaper, error) {
+func loadEvalContext(ctx context.Context, store *state.Store, topic string, dates []string) (map[string]string, map[string][]eval.SentPaper, map[string]eval.DayNote, error) {
 	rows, err := store.SelectionLabels(ctx, topic)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	labels := map[string]string{}
 	for _, row := range rows {
 		labels[row.PaperID] = row.Label
 	}
 	sent := map[string][]eval.SentPaper{}
+	notes := map[string]eval.DayNote{}
 	for _, date := range dates {
 		picks, err := store.DigestPicks(ctx, topic, date)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		list := make([]eval.SentPaper, 0, len(picks))
 		for _, pick := range picks {
 			list = append(list, eval.SentPaper{ID: pick.ID, Title: pick.Title})
 		}
 		sent[date] = list
+		current, decisions, err := store.DailyRecord(ctx, topic, date)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		note := eval.DayNote{Status: current.Status, Message: current.Message}
+		if len(decisions) > 0 {
+			note.Source = "stored"
+			note.Decisions = make([]eval.ScreenNote, len(decisions))
+			for i, decision := range decisions {
+				note.Decisions[i] = eval.ScreenNote{ID: decision.PaperID, Relevant: decision.Relevant, Score: decision.Score, Reason: decision.Reason, Skill: decision.Skill}
+			}
+		}
+		notes[date] = note
 	}
-	return labels, sent, nil
+	return labels, sent, notes, nil
+}
+
+func screenEval(ctx context.Context, cfg config.Config, topic string, dates []string, active papers.Rules, draft *papers.Rules, fetched []papers.Paper, notes map[string]eval.DayNote, skillPath string) (map[string]eval.DayNote, error) {
+	if strings.TrimSpace(cfg.Anthropic.APIKey) == "" {
+		return nil, errors.New("精筛需要 anthropic.api_key")
+	}
+	set, err := skills.Load(cfg.Skills.Dir)
+	if err != nil {
+		return nil, err
+	}
+	if err := cfg.ResolveSkills(set); err != nil {
+		return nil, err
+	}
+	name, _ := cfg.SkillNames(topic)
+	skill, err := set.Get(name)
+	if err != nil {
+		return nil, err
+	}
+	if skillPath != "" {
+		data, err := os.ReadFile(skillPath)
+		if err != nil {
+			return nil, err
+		}
+		skill, err = skills.Parse(string(data))
+		if err != nil {
+			return nil, err
+		}
+	}
+	model := strings.TrimSpace(cfg.Anthropic.Model)
+	if model == "" {
+		model = digest.DefaultModel
+	}
+	screener := digest.Screener{
+		Model: model, APIKey: cfg.Anthropic.APIKey, BaseURL: cfg.Anthropic.BaseURL,
+		Instruction: skill.Body, Skill: skill.Version(),
+	}
+	if notes == nil {
+		notes = map[string]eval.DayNote{}
+	}
+	for _, date := range dates {
+		batch, ok, err := papers.DigestBatch(date)
+		if err != nil {
+			return nil, err
+		}
+		window := batch.Window
+		if !ok {
+			window = papers.Window{}
+		}
+		selected := eval.ScreenTargets(fetched, window, active, draft)
+		note := notes[date]
+		note.Source = "model"
+		note.Decisions = nil
+		if len(selected) > 0 {
+			decisions, err := screener.Screen(ctx, selected)
+			if err != nil {
+				return nil, fmt.Errorf("%s 精筛失败，没有写入结果: %w", date, err)
+			}
+			note.Decisions = make([]eval.ScreenNote, len(decisions))
+			for i, decision := range decisions {
+				note.Decisions[i] = eval.ScreenNote{ID: decision.ID, Relevant: decision.Relevant, Score: decision.Score, Reason: decision.Reason, Skill: decision.Skill}
+			}
+		}
+		notes[date] = note
+	}
+	return notes, nil
 }
 
 func readCandidates(path string) ([]papers.Paper, error) {

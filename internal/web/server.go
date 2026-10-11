@@ -17,9 +17,11 @@ import (
 	"time"
 
 	"github.com/shichao-wang/paper-digest/internal/config"
+	"github.com/shichao-wang/paper-digest/internal/digest"
 	"github.com/shichao-wang/paper-digest/internal/job"
 	"github.com/shichao-wang/paper-digest/internal/papers"
 	"github.com/shichao-wang/paper-digest/internal/state"
+	"github.com/shichao-wang/paper-digest/skills"
 )
 
 type Options struct {
@@ -33,6 +35,10 @@ type Options struct {
 	// the union of their submission intervals, and the string is the arXiv
 	// search query. A nil Fetch uses the public arXiv API.
 	Fetch func(context.Context, papers.Window, string) ([]papers.Paper, error)
+	// ScreeningSkills are the live screening instructions per topic.
+	// Screen runs an opt-in model call for eval. It must not write storage.
+	ScreeningSkills map[string]skills.Skill
+	Screen          func(context.Context, string, []papers.Paper) ([]digest.Decision, error)
 }
 
 type topicRecord struct {
@@ -71,6 +77,8 @@ func New(store *state.Store, staticFS fs.FS, options ...Options) (http.Handler, 
 		}
 	}
 	s.fetch = settings.Fetch
+	s.screen = settings.Screen
+	s.screeningSkills = settings.ScreeningSkills
 	s.rules = settings.Rules
 	s.selections = settings.Selections
 	if len(s.rules) == 0 && len(s.selections) == 0 {
@@ -89,18 +97,23 @@ func New(store *state.Store, staticFS fs.FS, options ...Options) (http.Handler, 
 	if s.selections == nil {
 		s.selections = map[string]papers.Selection{}
 	}
+	if s.screeningSkills == nil {
+		s.screeningSkills = map[string]skills.Skill{}
+	}
 	return http.HandlerFunc(s.serveHTTP), nil
 }
 
 type server struct {
-	store        *state.Store
-	staticFS     fs.FS
-	files        http.Handler
-	topics       []topicRecord
-	defaultTopic string
-	fetch        func(context.Context, papers.Window, string) ([]papers.Paper, error)
-	rules        map[string]papers.Rules
-	selections   map[string]papers.Selection
+	store           *state.Store
+	staticFS        fs.FS
+	files           http.Handler
+	topics          []topicRecord
+	defaultTopic    string
+	fetch           func(context.Context, papers.Window, string) ([]papers.Paper, error)
+	screen          func(context.Context, string, []papers.Paper) ([]digest.Decision, error)
+	screeningSkills map[string]skills.Skill
+	rules           map[string]papers.Rules
+	selections      map[string]papers.Selection
 }
 
 func (s *server) selectTopic(w http.ResponseWriter, r *http.Request) (topicRecord, bool) {
@@ -129,7 +142,7 @@ func (s *server) selectTopic(w http.ResponseWriter, r *http.Request) (topicRecor
 func (s *server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	if r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/") {
-		if r.URL.Path == "/api/eval" || r.URL.Path == "/api/eval/rules" || r.URL.Path == "/api/eval/labels" || r.URL.Path == "/api/eval/fixtures" {
+		if r.URL.Path == "/api/eval" || r.URL.Path == "/api/eval/rules" || r.URL.Path == "/api/eval/skill" || r.URL.Path == "/api/eval/labels" || r.URL.Path == "/api/eval/fixtures" {
 			s.evalAPI(w, r)
 			return
 		}

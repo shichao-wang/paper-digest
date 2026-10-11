@@ -2,6 +2,7 @@ package eval
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -55,35 +56,63 @@ func Dates(start, end string) ([]string, error) {
 	return dates, nil
 }
 
+// ScreenTargets is the coarse set a screening call should see: the active
+// selection, plus any papers only the draft rules would collect.
+func ScreenTargets(fetched []papers.Paper, window papers.Window, active papers.Rules, draft *papers.Rules) []papers.Paper {
+	selected := papers.Select(fetched, window, active, nil)
+	if draft == nil {
+		return selected
+	}
+	seen := map[string]bool{}
+	for _, paper := range selected {
+		seen[paper.ID] = true
+	}
+	for _, paper := range papers.Select(fetched, window, *draft, nil) {
+		if seen[paper.ID] {
+			continue
+		}
+		selected = append(selected, paper)
+		seen[paper.ID] = true
+	}
+	return selected
+}
+
 type SentPaper struct {
 	ID    string `json:"id"`
 	Title string `json:"title"`
 }
 
 type Candidate struct {
-	ID            string    `json:"id"`
-	URL           string    `json:"url"`
-	Title         string    `json:"title"`
-	Authors       []string  `json:"authors"`
-	Abstract      string    `json:"abstract"`
-	Published     time.Time `json:"published"`
-	Categories    []string  `json:"categories"`
-	Tier          int       `json:"tier"`
-	Signals       []string  `json:"signals"`
-	Reason        string    `json:"reason"`
-	Selected      bool      `json:"selected"`
-	Position      int       `json:"position"`
-	Pushed        bool      `json:"pushed"`
-	LooseSelected bool      `json:"looseSelected"`
-	LoosePosition int       `json:"loosePosition"`
-	InDigest      bool      `json:"inDigest"`
-	Label         string    `json:"label"`
-	DraftSelected bool      `json:"draftSelected"`
-	DraftPosition int       `json:"draftPosition"`
-	DraftPushed   bool      `json:"draftPushed"`
-	DraftTier     int       `json:"draftTier"`
-	DraftSignals  []string  `json:"draftSignals"`
-	DraftReason   string    `json:"draftReason"`
+	ID             string    `json:"id"`
+	URL            string    `json:"url"`
+	Title          string    `json:"title"`
+	Authors        []string  `json:"authors"`
+	Abstract       string    `json:"abstract"`
+	Published      time.Time `json:"published"`
+	Categories     []string  `json:"categories"`
+	Tier           int       `json:"tier"`
+	Signals        []string  `json:"signals"`
+	Reason         string    `json:"reason"`
+	Selected       bool      `json:"selected"`
+	Position       int       `json:"position"`
+	Pushed         bool      `json:"pushed"`
+	LooseSelected  bool      `json:"looseSelected"`
+	LoosePosition  int       `json:"loosePosition"`
+	InDigest       bool      `json:"inDigest"`
+	Label          string    `json:"label"`
+	DraftSelected  bool      `json:"draftSelected"`
+	DraftPosition  int       `json:"draftPosition"`
+	DraftPushed    bool      `json:"draftPushed"`
+	DraftTier      int       `json:"draftTier"`
+	DraftSignals   []string  `json:"draftSignals"`
+	DraftReason    string    `json:"draftReason"`
+	Screened       bool      `json:"screened"`
+	ScreenRelevant bool      `json:"screenRelevant"`
+	ScreenScore    float64   `json:"screenScore"`
+	ScreenReason   string    `json:"screenReason"`
+	ScreenSkill    string    `json:"screenSkill"`
+	FinalPushed    bool      `json:"finalPushed"`
+	FinalPosition  int       `json:"finalPosition"`
 }
 
 type DraftComparison struct {
@@ -120,6 +149,11 @@ type Day struct {
 	OnlySent         []string         `json:"onlySent"`
 	Score            Score            `json:"score"`
 	Draft            *DraftComparison `json:"draft,omitempty"`
+	Final            []Candidate      `json:"final"`
+	ScreenSource     string           `json:"screenSource,omitempty"`
+	ScreenError      string           `json:"screenError,omitempty"`
+	JobStatus        string           `json:"jobStatus,omitempty"`
+	JobMessage       string           `json:"jobMessage,omitempty"`
 }
 
 type Report struct {
@@ -127,10 +161,28 @@ type Report struct {
 	Days  []Day  `json:"days"`
 }
 
+// ScreenNote is one stored or freshly computed screening verdict.
+type ScreenNote struct {
+	ID       string
+	Relevant bool
+	Score    float64
+	Reason   string
+	Skill    string
+}
+
+// DayNote is what the digest already recorded for a date, plus an optional live screen.
+type DayNote struct {
+	Status    string
+	Message   string
+	Source    string
+	Decisions []ScreenNote
+}
+
 // Build previews selection for each date. It does not read or write storage.
 // labels maps paper ID to relevant or not_relevant. sent maps a date to the
-// papers recorded for that digest, in saved order.
-func Build(topic string, dates []string, active papers.Rules, draft *papers.Rules, fetched []papers.Paper, sent map[string][]SentPaper, labels map[string]string) (Report, error) {
+// papers recorded for that digest, in saved order. notes carries stored or
+// live screening verdicts; a nil map leaves screening blank.
+func Build(topic string, dates []string, active papers.Rules, draft *papers.Rules, fetched []papers.Paper, sent map[string][]SentPaper, labels map[string]string, notes map[string]DayNote) (Report, error) {
 	if len(dates) == 0 {
 		return Report{}, fmt.Errorf("date is required")
 	}
@@ -147,12 +199,12 @@ func Build(topic string, dates []string, active papers.Rules, draft *papers.Rule
 		if err != nil {
 			return Report{}, err
 		}
-		report.Days = append(report.Days, buildDay(date, cutoff, batch, ok, active, draft, fetched, sent[date], labels))
+		report.Days = append(report.Days, buildDay(date, cutoff, batch, ok, active, draft, fetched, sent[date], labels, notes[date]))
 	}
 	return report, nil
 }
 
-func buildDay(date string, cutoff time.Time, batch papers.Batch, hasBatch bool, active papers.Rules, draft *papers.Rules, fetched []papers.Paper, sent []SentPaper, labels map[string]string) Day {
+func buildDay(date string, cutoff time.Time, batch papers.Batch, hasBatch bool, active papers.Rules, draft *papers.Rules, fetched []papers.Paper, sent []SentPaper, labels map[string]string, note DayNote) Day {
 	window := batch.Window
 	if !hasBatch {
 		window = papers.Window{}
@@ -185,6 +237,7 @@ func buildDay(date string, cutoff time.Time, batch papers.Batch, hasBatch bool, 
 		item := candidate(paper, explanation, selectedAt, pushedAt, looseAt, inDigest, labels, draft != nil, draftExplanation, draftAt, draftPushedAt)
 		byID[paper.ID] = item
 	}
+	applyScreen(byID, selected, note, active.MaxPapers())
 	if sent == nil {
 		sent = []SentPaper{}
 	}
@@ -254,8 +307,67 @@ func buildDay(date string, cutoff time.Time, batch papers.Batch, hasBatch bool, 
 			day.OnlySent = append(day.OnlySent, paper.ID)
 		}
 	}
-	day.Score = score(day.Pushed)
+	day.Final = finalOf(byID)
+	day.ScreenSource = note.Source
+	day.ScreenError = screenError(note)
+	day.JobStatus = note.Status
+	day.JobMessage = note.Message
+	if len(note.Decisions) > 0 {
+		day.Score = score(day.Final)
+	} else {
+		day.Score = score(day.Pushed)
+	}
 	return day
+}
+
+func applyScreen(byID map[string]Candidate, selected []papers.Paper, note DayNote, limit int) {
+	if len(note.Decisions) == 0 {
+		return
+	}
+	scores := map[string]float64{}
+	byDecision := map[string]ScreenNote{}
+	for _, decision := range note.Decisions {
+		byDecision[decision.ID] = decision
+		if decision.Relevant {
+			scores[decision.ID] = decision.Score
+		}
+	}
+	finalAt := map[string]int{}
+	for i, paper := range papers.ForPush(papers.RankRelevant(selected, scores), limit) {
+		finalAt[paper.ID] = i + 1
+	}
+	for id, item := range byID {
+		decision, ok := byDecision[id]
+		if !ok {
+			continue
+		}
+		item.Screened = true
+		item.ScreenRelevant = decision.Relevant
+		item.ScreenScore = decision.Score
+		item.ScreenReason = decision.Reason
+		item.ScreenSkill = decision.Skill
+		item.FinalPosition = finalAt[id]
+		item.FinalPushed = finalAt[id] > 0
+		byID[id] = item
+	}
+}
+
+func finalOf(byID map[string]Candidate) []Candidate {
+	out := make([]Candidate, 0)
+	for _, item := range byID {
+		if item.FinalPushed {
+			out = append(out, item)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].FinalPosition < out[j].FinalPosition })
+	return out
+}
+
+func screenError(note DayNote) string {
+	if note.Status == "missed" && strings.TrimSpace(note.Message) != "" {
+		return strings.TrimSpace(note.Message)
+	}
+	return ""
 }
 
 func windowPapers(fetched []papers.Paper, window papers.Window) []papers.Paper {
@@ -406,8 +518,17 @@ func Format(report Report) string {
 		} else {
 			fmt.Fprintf(&b, "筛选预览 %s  arXiv 公告日 %s（美东）  提交 %s 之后至 %s\n", day.Date, day.Announcement, day.SubmittedAfter.UTC().Format(time.RFC3339), day.SubmittedThrough.UTC().Format(time.RFC3339))
 		}
-		b.WriteString("不调用模型，不发送飞书，不写入日报或去重记录。\n")
-		fmt.Fprintf(&b, "收集 %d 篇，将推送 %d 篇（上限 %d）；宽松基线 %d 篇；当日已保存 %d 篇。\n", len(day.Selected), len(day.Pushed), day.PushLimit, len(day.Loose), len(day.Sent))
+		if day.ScreenSource == "model" {
+			b.WriteString("本次调用了模型做精筛，不发送飞书，不写入日报、精筛结论或去重记录。\n")
+		} else {
+			b.WriteString("不调用模型，不发送飞书，不写入日报或去重记录。\n")
+		}
+		fmt.Fprintf(&b, "粗筛收集 %d 篇，粗筛上限内 %d 篇（上限 %d）；精筛后将推送 %d 篇；宽松基线 %d 篇；当日已保存 %d 篇。\n", len(day.Selected), len(day.Pushed), day.PushLimit, len(day.Final), len(day.Loose), len(day.Sent))
+		if day.ScreenError != "" {
+			fmt.Fprintf(&b, "当天未发送：%s\n", day.ScreenError)
+		} else if day.JobStatus == "missed" {
+			b.WriteString("当天未发送，没有留下原因。\n")
+		}
 		if day.Draft != nil {
 			fmt.Fprintf(&b, "草稿收集 %d 篇，将推送 %d 篇。草稿规则不会写回配置。\n", len(day.Draft.Selected), len(day.Draft.Pushed))
 			if day.Draft.Score.Labeled == 0 {
@@ -448,6 +569,13 @@ func Format(report Report) string {
 			fmt.Fprintf(&b, "  分类：%s\n", strings.Join(item.Categories, " "))
 			fmt.Fprintf(&b, "  信号：%s\n", strings.Join(item.Signals, ", "))
 			fmt.Fprintf(&b, "  原因：%s\n", reasonText(item.Reason))
+			if item.Screened {
+				verdict := "不相关"
+				if item.ScreenRelevant {
+					verdict = "相关"
+				}
+				fmt.Fprintf(&b, "  精筛：%s %.2f %s\n", verdict, item.ScreenScore, item.ScreenReason)
+			}
 			if day.Draft != nil {
 				mark := "草稿未收集"
 				if item.DraftPushed {
@@ -473,6 +601,17 @@ func writeCandidate(b *strings.Builder, item Candidate) {
 	fmt.Fprintf(b, "   分类：%s\n", strings.Join(item.Categories, " "))
 	fmt.Fprintf(b, "   信号：%s\n", strings.Join(item.Signals, ", "))
 	fmt.Fprintf(b, "   原因：%s  人工：%s\n", reasonText(item.Reason), labelText(item.Label))
+	if item.Screened {
+		verdict := "不相关"
+		if item.ScreenRelevant {
+			verdict = "相关"
+		}
+		final := "不推送"
+		if item.FinalPushed {
+			final = fmt.Sprintf("精筛后将推送 #%d", item.FinalPosition)
+		}
+		fmt.Fprintf(b, "   精筛：%s %.2f %s（%s）\n", verdict, item.ScreenScore, item.ScreenReason, final)
+	}
 }
 
 func writeIDList(b *strings.Builder, heading string, ids []string) {

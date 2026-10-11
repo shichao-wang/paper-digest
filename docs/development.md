@@ -82,7 +82,7 @@ go run ./cmd/paper-digest --config data/web-preview-2/config.json serve
 | `health [--url <地址>]` | 检查正在运行的 HTTP 与数据库；不读取配置 |
 | `status [YYYY-MM-DD]` | 查询联合主题任务；默认北京时间当天，无任务时失败 |
 | `preview <fixture.json>` | 离线渲染 Markdown 到标准输出；不读配置或数据库 |
-| `eval --date YYYY-MM-DD [--to YYYY-MM-DD] [--rules candidate.json] [--input papers.json] [--json]` | 用当前规则预览选题；`--rules` 只额外对照一份草稿，不写配置、不调用模型、不发送、不写日报或去重记录 |
+| `eval --date YYYY-MM-DD [--to YYYY-MM-DD] [--rules candidate.json] [--input papers.json] [--screen] [--skill SKILL.md] [--json]` | 预览粗筛和已保存精筛。`--screen` 才调用模型，可附一份草稿技能；不写配置、不发送、不写日报或去重记录 |
 | `eval rules [--topic id]` | 打印该主题正在使用的筛选规则，不打开数据库 |
 | `eval label --id <id> --label relevant\|not-relevant\|clear [--input papers.json]` | 保存或清除一篇论文的人工判断 |
 | `eval fixtures` | 把已标注且有论文快照的记录导出为回归样本 |

@@ -21,6 +21,22 @@ func (f analyzerFunc) Analyze(ctx context.Context, paper papers.Paper) (digest.S
 	return f(ctx, paper)
 }
 
+type screenFunc func(context.Context, []papers.Paper) ([]digest.Decision, error)
+
+func (f screenFunc) Screen(ctx context.Context, list []papers.Paper) ([]digest.Decision, error) {
+	return f(ctx, list)
+}
+
+func acceptAllScreen() screenFunc {
+	return func(_ context.Context, list []papers.Paper) ([]digest.Decision, error) {
+		out := make([]digest.Decision, len(list))
+		for i, paper := range list {
+			out[i] = digest.Decision{ID: paper.ID, Relevant: true, Score: 1, Reason: "测试通过", Skill: "paper-screening@test"}
+		}
+		return out, nil
+	}
+}
+
 type senderFunc func(context.Context, string) error
 
 func (f senderFunc) Send(ctx context.Context, message string) error { return f(ctx, message) }
@@ -45,8 +61,9 @@ func testRunner(t *testing.T) *Runner {
 		Analyzer: analyzerFunc(func(context.Context, papers.Paper) (digest.Summary, error) {
 			return digest.Summary{Text: "基于摘要的中文要点", Model: "fixture", PromptVersion: "test"}, nil
 		}),
-		Now:   func() time.Time { return now },
-		Rules: papers.DefaultRules(),
+		Screen: acceptAllScreen(),
+		Now:    func() time.Time { return now },
+		Rules:  papers.DefaultRules(),
 	}
 }
 

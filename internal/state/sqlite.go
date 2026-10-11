@@ -264,6 +264,17 @@ CREATE TABLE IF NOT EXISTS selection_labels (
 	updated_at TEXT NOT NULL,
 	PRIMARY KEY (topic, paper_id)
 );
+CREATE TABLE IF NOT EXISTS screening (
+	topic TEXT NOT NULL,
+	date TEXT NOT NULL,
+	paper_id TEXT NOT NULL,
+	relevant INTEGER NOT NULL CHECK (relevant IN (0, 1)),
+	score REAL NOT NULL CHECK (score >= 0 AND score <= 1),
+	reason TEXT NOT NULL,
+	skill TEXT NOT NULL,
+	PRIMARY KEY (topic, date, paper_id),
+	FOREIGN KEY (topic, date) REFERENCES jobs(topic, date) ON DELETE CASCADE
+);
 `
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("initialize sqlite schema: %w", err)
@@ -433,7 +444,26 @@ ORDER BY date, topic`, statusNew, statusProcessing, statusReady)
 	return jobs, nil
 }
 
+// Screening is one model's verdict for a coarse candidate.
+type Screening struct {
+	PaperID  string
+	Relevant bool
+	Score    float64
+	Reason   string
+	Skill    string
+}
+
 func (s *Store) SaveCandidates(ctx context.Context, topic, date string, candidates []papers.Paper) error {
+	return s.saveCandidates(ctx, topic, date, candidates, nil)
+}
+
+// SaveScreened stores the push set and every screening verdict in one transaction.
+// decisions is ignored when nil, which is the resume path of SaveCandidates.
+func (s *Store) SaveScreened(ctx context.Context, topic, date string, candidates []papers.Paper, decisions []Screening) error {
+	return s.saveCandidates(ctx, topic, date, candidates, decisions)
+}
+
+func (s *Store) saveCandidates(ctx context.Context, topic, date string, candidates []papers.Paper, decisions []Screening) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin candidate save: %w", err)
@@ -479,6 +509,16 @@ ON CONFLICT(topic, date, paper_id) DO NOTHING`, topic, date, paper.ID, version, 
 			return fmt.Errorf("save daily paper %s: %w", paper.ID, err)
 		}
 	}
+	if decisions != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM screening WHERE topic = ? AND date = ?`, topic, date); err != nil {
+			return fmt.Errorf("replace screening decisions: %w", err)
+		}
+		for _, decision := range decisions {
+			if err := insertScreening(ctx, tx, topic, date, decision); err != nil {
+				return err
+			}
+		}
+	}
 	if _, err := tx.ExecContext(ctx, `UPDATE jobs SET status = ? WHERE topic = ? AND date = ? AND status = ?`, statusProcessing, topic, date, statusNew); err != nil {
 		return fmt.Errorf("mark daily job processing: %w", err)
 	}
@@ -486,6 +526,66 @@ ON CONFLICT(topic, date, paper_id) DO NOTHING`, topic, date, paper.ID, version, 
 		return fmt.Errorf("commit candidate save: %w", err)
 	}
 	return nil
+}
+
+func insertScreening(ctx context.Context, tx *sql.Tx, topic, date string, decision Screening) error {
+	if strings.TrimSpace(decision.PaperID) == "" || strings.TrimSpace(decision.Reason) == "" || strings.TrimSpace(decision.Skill) == "" {
+		return fmt.Errorf("screening decision for %s is incomplete", decision.PaperID)
+	}
+	if decision.Score < 0 || decision.Score > 1 {
+		return fmt.Errorf("screening score for %s is out of range", decision.PaperID)
+	}
+	relevant := 0
+	if decision.Relevant {
+		relevant = 1
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO screening(topic, date, paper_id, relevant, score, reason, skill)
+VALUES(?, ?, ?, ?, ?, ?, ?)`, topic, date, decision.PaperID, relevant, decision.Score, strings.TrimSpace(decision.Reason), decision.Skill); err != nil {
+		return fmt.Errorf("save screening for %s: %w", decision.PaperID, err)
+	}
+	return nil
+}
+
+func (s *Store) Screening(ctx context.Context, topic, date string) ([]Screening, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT paper_id, relevant, score, reason, skill FROM screening
+WHERE topic = ? AND date = ?
+ORDER BY paper_id`, topic, date)
+	if err != nil {
+		return nil, fmt.Errorf("list screening decisions: %w", err)
+	}
+	defer rows.Close()
+	out := make([]Screening, 0)
+	for rows.Next() {
+		var item Screening
+		var relevant int
+		if err := rows.Scan(&item.PaperID, &relevant, &item.Score, &item.Reason, &item.Skill); err != nil {
+			return nil, fmt.Errorf("scan screening decision: %w", err)
+		}
+		item.Relevant = relevant == 1
+		out = append(out, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read screening decisions: %w", err)
+	}
+	return out, nil
+}
+
+// DailyRecord returns the job and its screening rows. A missing job is a zero Job and a nil error.
+func (s *Store) DailyRecord(ctx context.Context, topic, date string) (Job, []Screening, error) {
+	job, err := s.GetJob(ctx, topic, date)
+	if errors.Is(err, ErrJobNotFound) {
+		return Job{}, nil, nil
+	}
+	if err != nil {
+		return Job{}, nil, err
+	}
+	rows, err := s.Screening(ctx, topic, date)
+	if err != nil {
+		return Job{}, nil, err
+	}
+	return job, rows, nil
 }
 
 func (s *Store) PendingPapers(ctx context.Context, topic, date string) ([]papers.Paper, error) {
@@ -662,6 +762,36 @@ UPDATE jobs SET status = ? WHERE topic = ? AND date = ? AND status IN (?, ?, ?, 
 		}
 	}
 	return nil
+}
+
+// MarkMissedWithReason marks a not-yet-processed day missed and stores the reason.
+// It does not clear a reason already saved, and it does not rewrite a later state.
+func (s *Store) MarkMissedWithReason(ctx context.Context, topic, date, reason string) error {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return errors.New("state: missed reason is empty")
+	}
+	result, err := s.db.ExecContext(ctx, `
+UPDATE jobs SET status = ?, message = ?
+WHERE topic = ? AND date = ? AND status = ?`, statusMissed, reason, topic, date, statusNew)
+	if err != nil {
+		return fmt.Errorf("mark daily job missed: %w", err)
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("check missed transition: %w", err)
+	}
+	if changed == 1 {
+		return nil
+	}
+	current, err := s.GetJob(ctx, topic, date)
+	if err != nil {
+		return err
+	}
+	if current.Status == statusMissed {
+		return nil
+	}
+	return fmt.Errorf("mark job missed from %q state: %w", current.Status, ErrInvalidState)
 }
 
 func (s *Store) ClaimSend(ctx context.Context, topic, date string) (bool, error) {

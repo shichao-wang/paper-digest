@@ -52,7 +52,7 @@ func TestBuildComparesCurrentLooseAndSentWithoutUsingLabelsOutsideSelection(t *t
 	}
 	labels := map[string]string{strong.ID: LabelRelevant, weak.ID: LabelNotRelevant}
 
-	report, err := Build("recommendation-advertising-search", []string{"2026-10-09"}, papers.DefaultRules(), nil, fetched, sent, labels)
+	report, err := Build("recommendation-advertising-search", []string{"2026-10-09"}, papers.DefaultRules(), nil, fetched, sent, labels, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestBuildComparesCurrentLooseAndSentWithoutUsingLabelsOutsideSelection(t *t
 		t.Fatalf("format = %s", text)
 	}
 
-	unlabeled, err := Build("recommendation-advertising-search", []string{"2026-10-09"}, papers.DefaultRules(), nil, fetched, nil, nil)
+	unlabeled, err := Build("recommendation-advertising-search", []string{"2026-10-09"}, papers.DefaultRules(), nil, fetched, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestBuildComparesCurrentLooseAndSentWithoutUsingLabelsOutsideSelection(t *t
 	if !strings.Contains(Format(unlabeled), "精确率暂无") {
 		t.Fatal(Format(unlabeled))
 	}
-	sunday, err := Build("recommendation-advertising-search", []string{"2026-10-11"}, papers.DefaultRules(), nil, fetched, nil, nil)
+	sunday, err := Build("recommendation-advertising-search", []string{"2026-10-11"}, papers.DefaultRules(), nil, fetched, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ func TestCollectedPapersStayVisibleAboveThePushCap(t *testing.T) {
 			URL:       "https://arxiv.org/abs/example",
 		}
 	}
-	report, err := Build("recommendation-advertising-search", []string{"2026-10-09"}, rules, nil, fetched, nil, nil)
+	report, err := Build("recommendation-advertising-search", []string{"2026-10-09"}, rules, nil, fetched, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func TestCollectedPapersStayVisibleAboveThePushCap(t *testing.T) {
 	if !day.Selected[0].Pushed || !day.Selected[1].Pushed || day.Selected[2].Pushed || day.Candidates[2].Pushed {
 		t.Fatalf("push flags = %#v", day.Selected)
 	}
-	if !strings.Contains(Format(report), "收集 4 篇，将推送 2 篇（上限 2）") || !strings.Contains(Format(report), "超出推送上限") {
+	if !strings.Contains(Format(report), "粗筛收集 4 篇，粗筛上限内 2 篇（上限 2）") || !strings.Contains(Format(report), "超出推送上限") {
 		t.Fatal(Format(report))
 	}
 }
