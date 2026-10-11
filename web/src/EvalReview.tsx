@@ -1,0 +1,343 @@
+import { useEffect, useRef, useState, type FormEvent } from 'react'
+
+interface EvalCandidate {
+  id: string
+  url: string
+  title: string
+  authors: string[]
+  abstract: string
+  published: string
+  categories: string[]
+  tier: number
+  signals: string[]
+  reason: string
+  selected: boolean
+  position: number
+  pushed: boolean
+  looseSelected: boolean
+  loosePosition: number
+  inDigest: boolean
+  label: string
+  draftSelected: boolean
+  draftPosition: number
+  draftPushed: boolean
+  draftTier: number
+  draftSignals: string[]
+  draftReason: string
+  screened: boolean
+  screenRelevant: boolean
+  screenScore: number
+  screenReason: string
+  screenSkill: string
+  finalPushed: boolean
+  finalPosition: number
+}
+
+interface DraftComparison {
+  selected: EvalCandidate[]
+  pushed: EvalCandidate[]
+  onlyDraft: string[]
+  onlyActive: string[]
+  score: EvalScore
+}
+
+interface EvalScore {
+  selected: number
+  labeled: number
+  relevant: number
+  notRelevant: number
+  precision: number | null
+}
+
+interface EvalDay {
+  date: string
+  hasBatch: boolean
+  announcement?: string
+  submittedAfter?: string
+  submittedThrough?: string
+  selected: EvalCandidate[]
+  pushed: EvalCandidate[]
+  pushLimit: number
+  loose: EvalCandidate[]
+  sent: { id: string; title: string }[]
+  candidates: EvalCandidate[]
+  onlyCurrent: string[]
+  onlyLoose: string[]
+  onlySent: string[]
+  score: EvalScore
+  draft?: DraftComparison
+  final: EvalCandidate[]
+  screenSource?: string
+  screenError?: string
+  jobStatus?: string
+  jobMessage?: string
+}
+
+interface EvalReport {
+  topic: string
+  days: EvalDay[]
+}
+
+const reasons: Record<string, string> = {
+  'title match': '标题命中',
+  'cs.IR with a technique signal': 'cs.IR 且有技术信号',
+  'abstract phrase only': '仅摘要中的强短语',
+  'private information retrieval is not search': '私有信息检索，不是搜索',
+  'recommendation appears only as an ordinary word': 'recommendation 只是普通用词',
+  'cs.IR alone is not a topic match': '仅有 cs.IR，不是主题命中',
+  'search or ads appears only as an ordinary word': 'search 或 ads 只是普通用词',
+  'no topic signal': '没有主题信号',
+}
+
+function shanghaiToday() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())
+}
+
+function reasonText(reason: string) {
+  return reasons[reason] || reason
+}
+
+function scoreOf(selected: EvalCandidate[]): EvalScore {
+  let labeled = 0
+  let relevant = 0
+  let notRelevant = 0
+  for (const item of selected) {
+    if (item.label === 'relevant') {
+      labeled += 1
+      relevant += 1
+    } else if (item.label === 'not_relevant') {
+      labeled += 1
+      notRelevant += 1
+    }
+  }
+  return { selected: selected.length, labeled, relevant, notRelevant, precision: labeled > 0 ? relevant / labeled : null }
+}
+
+function withLabel(report: EvalReport, id: string, label: string): EvalReport {
+  const apply = (item: EvalCandidate) => item.id === id ? { ...item, label } : item
+  return {
+    ...report,
+    days: report.days.map(day => {
+      const selected = day.selected.map(apply)
+      const pushed = (day.pushed || []).map(apply)
+      const final = (day.final || []).map(apply)
+      const judged = day.screenSource ? final : pushed
+      const draft = day.draft ? { ...day.draft, selected: day.draft.selected.map(apply), pushed: (day.draft.pushed || []).map(apply), score: scoreOf((day.draft.pushed || []).map(apply)) } : undefined
+      return { ...day, selected, pushed, final, loose: day.loose.map(apply), candidates: day.candidates.map(apply), draft, score: scoreOf(judged) }
+    }),
+  }
+}
+
+function titleOf(day: EvalDay, id: string) {
+  return day.candidates.find(item => item.id === id)?.title || day.sent.find(item => item.id === id)?.title || id
+}
+
+function arxivURL(item: EvalCandidate) {
+  return item.url || `https://arxiv.org/abs/${item.id.replace(/^arxiv:/, '')}`
+}
+
+export default function EvalReview({ topicID }: { topicID: string }) {
+  const [date, setDate] = useState(shanghaiToday)
+  const [end, setEnd] = useState('')
+  const [report, setReport] = useState<EvalReport | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [labelError, setLabelError] = useState('')
+  const [pendingID, setPendingID] = useState('')
+  const [rulesText, setRulesText] = useState('')
+  const [activeRules, setActiveRules] = useState('')
+  const [hasRules, setHasRules] = useState<boolean | null>(null)
+  const [rulesError, setRulesError] = useState('')
+  const [screen, setScreen] = useState(false)
+  const [skillText, setSkillText] = useState('')
+  const [activeSkill, setActiveSkill] = useState('')
+  const abort = useRef<AbortController | null>(null)
+  useEffect(() => () => abort.current?.abort(), [])
+  useEffect(() => {
+    const controller = new AbortController()
+    setHasRules(null)
+    setRulesError('')
+    setReport(null)
+    fetch(`/api/eval/rules?${new URLSearchParams({ topic: topicID })}`, { signal: controller.signal })
+      .then(async response => {
+        if (response.status === 400) {
+          setHasRules(false)
+          return
+        }
+        if (!response.ok) throw new Error('无法读取当前筛选规则。')
+        const text = JSON.stringify(await response.json(), null, 2)
+        setActiveRules(text)
+        setRulesText(text)
+        setHasRules(true)
+      })
+      .catch(caught => {
+        if (caught instanceof DOMException && caught.name === 'AbortError') return
+        setHasRules(false)
+        setRulesError(caught instanceof Error ? caught.message : '无法读取当前筛选规则。')
+      })
+    return () => controller.abort()
+  }, [topicID])
+  useEffect(() => {
+    const controller = new AbortController()
+    fetch(`/api/eval/skill?${new URLSearchParams({ topic: topicID })}`, { signal: controller.signal })
+      .then(async response => {
+        if (!response.ok) return
+        const payload = await response.json() as { body?: string }
+        const body = payload.body || ''
+        setActiveSkill(body)
+        setSkillText(body)
+      })
+      .catch(caught => {
+        if (caught instanceof DOMException && caught.name === 'AbortError') return
+      })
+    return () => controller.abort()
+  }, [topicID])
+
+  async function preview(mode: 'active' | 'draft') {
+    abort.current?.abort()
+    const controller = new AbortController()
+    abort.current = controller
+    setLoading(true)
+    setError('')
+    setLabelError('')
+    try {
+      let response: Response
+      const screeningSkill = screen && skillText !== activeSkill ? skillText : ''
+      if (mode === 'draft' || screen) {
+        let rules: unknown
+        if (mode === 'draft') {
+          try {
+            rules = JSON.parse(rulesText)
+          } catch {
+            throw new Error('草稿不是合法的 JSON。')
+          }
+        }
+        response = await fetch(`/api/eval?${new URLSearchParams({ topic: topicID })}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ date, to: end, rules, screen, screeningSkill }),
+          signal: controller.signal,
+        })
+      } else {
+        const query = new URLSearchParams({ date, topic: topicID })
+        if (end) query.set('to', end)
+        response = await fetch(`/api/eval?${query}`, { signal: controller.signal })
+      }
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null
+        if (payload?.error && payload.error !== 'invalid query parameters') throw new Error(payload.error)
+        throw new Error(response.status === 400 ? '日期无效，或一次最多预览 14 天。' : '暂时无法完成预览。请确认本机可以访问 arXiv 后重试。')
+      }
+      setReport(await response.json() as EvalReport)
+    } catch (caught) {
+      if (caught instanceof DOMException && caught.name === 'AbortError') return
+      setError(caught instanceof Error ? caught.message : '暂时无法完成预览。')
+    } finally {
+      if (abort.current === controller) setLoading(false)
+    }
+  }
+
+  function runPreview(event: FormEvent) {
+    event.preventDefault()
+    void preview('active')
+  }
+
+  async function label(item: EvalCandidate, value: 'relevant' | 'not_relevant' | 'clear') {
+    setPendingID(item.id)
+    setLabelError('')
+    const snapshot = {
+      ID: item.id,
+      Title: item.title,
+      Abstract: item.abstract,
+      Authors: item.authors,
+      Published: item.published,
+      URL: item.url,
+      categories: item.categories,
+    }
+    try {
+      const response = await fetch(`/api/eval/labels?${new URLSearchParams({ topic: topicID })}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paperID: item.id, label: value, snapshot: value === 'clear' ? null : snapshot }),
+      })
+      if (!response.ok) throw new Error(response.status === 403 ? '请从本机地址打开页面后再标注。' : '没能保存这条判断。')
+      setReport(current => current ? withLabel(current, item.id, value === 'clear' ? '' : value) : current)
+    } catch (caught) {
+      setLabelError(caught instanceof Error ? caught.message : '没能保存这条判断。')
+    } finally {
+      setPendingID('')
+    }
+  }
+
+  if (hasRules === null) {
+    return <div className="message" role="status"><h3>正在读取筛选规则</h3><p>只读取本机配置，不会抓取 arXiv。</p></div>
+  }
+  if (!hasRules) {
+    return <div className="message" role="status"><h3>当前主题没有筛选规则</h3><p>{rulesError || '请从主题导航切换到已配置筛选规则的主题。联合主题在省略 selection 时使用内置规则。'}</p></div>
+  }
+
+  return <div className="eval-review">
+    <p className="eval-note">开始日期和结束日期都是北京时间的日报日期，含首尾。每一天只收集对应的一个 arXiv 公告日。粗筛列出全部合格论文，并标出推送上限内的那些；精筛结论来自已保存的结果。勾选下面的选项才会调用模型，调用会产生费用，而且不会发送、不会写入日报。周日和周一没有新公告，预览为空，不会改看上一批。打开本页不会自动抓取，也不会调用模型。</p>
+    <div className="rules-editor">
+      <label className="filter-field"><span>筛选规则 JSON</span><textarea value={rulesText} spellCheck={false} onChange={event => setRulesText(event.target.value)} aria-label="筛选规则 JSON" /></label>
+      <div className="rules-actions">
+        <button type="button" className="secondary" disabled={rulesText === activeRules} onClick={() => setRulesText(activeRules)}>恢复为当前规则</button>
+      </div>
+    </div>
+    <div className="rules-editor">
+      <label className="eval-check"><input type="checkbox" checked={screen} onChange={event => setScreen(event.target.checked)} />调用模型精筛（会产生费用，不写入、不发送）</label>
+      <label className="filter-field"><span>精筛技能</span><textarea value={skillText} spellCheck={false} onChange={event => setSkillText(event.target.value)} aria-label="精筛技能" /></label>
+      <div className="rules-actions">
+        <button type="button" className="secondary" disabled={skillText === activeSkill} onClick={() => setSkillText(activeSkill)}>恢复为当前精筛技能</button>
+      </div>
+    </div>
+    <form className="eval-form" onSubmit={runPreview}>
+      <label className="filter-field"><span>开始日期</span><input type="date" required value={date} onChange={event => setDate(event.target.value)} /></label>
+      <label className="filter-field"><span>结束日期</span><input type="date" value={end} onChange={event => setEnd(event.target.value)} /></label>
+      <button type="submit" disabled={loading || !date}>{loading ? '正在预览…' : '运行当前规则'}</button>
+      <button type="button" disabled={loading || !date} onClick={() => void preview('draft')}>用草稿对照</button>
+      <a href={`/api/eval/fixtures?${new URLSearchParams({ topic: topicID })}`}>导出已标注样本</a>
+    </form>
+    {loading && <div className="message" role="status"><h3>{screen ? '正在调用模型精筛' : '正在按当前规则预览'}</h3><p>{screen ? '这次会调用模型，产生费用。结果只显示在页面上，不发送，也不写入日报。' : '只读取 arXiv 公开元数据、本机标注和已保存的精筛结论，不会调用模型或发送飞书。'}</p></div>}
+    {error && <div className="message" role="status"><h3>无法完成预览</h3><p>{error}</p></div>}
+    {labelError && <p className="row-error" role="status">{labelError}</p>}
+    {report?.days.map(day => <section key={day.date} className="eval-day">
+      <div className="eval-score">
+        <strong>{day.date}</strong>{day.hasBatch ? ` 对应 arXiv 公告日 ${day.announcement}（美东）。` : ' 没有新的 arXiv 公告，不重复采集上一批。'}粗筛收集 {day.selected.length} 篇，粗筛上限内 {day.pushed.length} 篇（上限 {day.pushLimit}），精筛后将推送 {(day.final || []).length} 篇，宽松基线 {day.loose.length} 篇，当日已保存 {day.sent.length} 篇。
+        {day.screenSource === 'model' ? ' 本次调用了模型，没有写入。' : day.screenSource === 'stored' ? ' 精筛结论来自已保存的记录。' : ' 这一天还没有精筛结论。'}
+        {day.jobStatus === 'missed' ? ` 当天状态是错过发送。${day.screenError || day.jobMessage || '没有留下原因。'}` : ''}
+        {day.score.labeled === 0 ? ' 已标注将推送 0 篇，精确率暂无。' : ` 已标注将推送 ${day.score.labeled} 篇，其中相关 ${day.score.relevant}、不相关 ${day.score.notRelevant}，精确率 ${day.score.precision?.toFixed(2)}。`}
+        {day.draft ? (day.draft.score.labeled === 0 ? ` 草稿收集 ${day.draft.selected.length} 篇，将推送 ${day.draft.pushed.length} 篇，已标注 0 篇，精确率暂无。` : ` 草稿收集 ${day.draft.selected.length} 篇，将推送 ${day.draft.pushed.length} 篇，已标注 ${day.draft.score.labeled} 篇，其中相关 ${day.draft.score.relevant}、不相关 ${day.draft.score.notRelevant}，精确率 ${day.draft.score.precision?.toFixed(2)}。`) : ''}
+      </div>
+      <h3>收集到的论文</h3>
+      {day.selected.length === 0 ? <p className="eval-note">这一天没有收集到合格论文。</p> : <ol className="eval-selected">{day.selected.map(item => <li key={item.id}><a href={arxivURL(item)} target="_blank" rel="noreferrer">{item.title}</a> <span className="eval-meta">#{item.position} · tier {item.tier} · {item.pushed ? '粗筛上限内' : '超出粗筛上限'} · {item.screened ? (item.finalPushed ? `精筛后将推送 #${item.finalPosition}` : '精筛不推送') : '尚无精筛'} · {item.id}</span></li>)}</ol>}
+      {day.draft && <><h3>草稿收集</h3>{day.draft.selected.length === 0 ? <p className="eval-note">草稿没有收集到论文。</p> : <ol className="eval-selected">{day.draft.selected.map(item => <li key={item.id}><a href={arxivURL(item)} target="_blank" rel="noreferrer">{item.title}</a> <span className="eval-meta">#{item.draftPosition} · tier {item.draftTier} · {item.draftPushed ? '将推送' : '超出推送上限'} · {item.id}</span></li>)}</ol>}</>}
+      <div className="eval-diff">
+        <section><h3>仅当前规则</h3>{idList(day, day.onlyCurrent)}</section>
+        <section><h3>仅宽松基线</h3>{idList(day, day.onlyLoose)}</section>
+        <section><h3>仅当日已保存</h3>{idList(day, day.onlySent)}</section>
+        {day.draft && <section><h3>仅草稿</h3>{idList(day, day.draft.onlyDraft)}</section>}
+        {day.draft && <section><h3>仅当前规则（草稿未入选）</h3>{idList(day, day.draft.onlyActive)}</section>}
+      </div>
+      <h3>全部候选</h3>
+      {day.candidates.map(item => <article className="eval-candidate" key={item.id}>
+        <header><h3><a href={arxivURL(item)} target="_blank" rel="noreferrer">{item.title}</a></h3><span className="eval-meta">{item.finalPushed ? `精筛后将推送 #${item.finalPosition}` : item.pushed ? `粗筛上限内 #${item.position}` : item.selected ? `粗筛收集 #${item.position}，超出上限` : '未收集'} · tier {item.tier}</span></header>
+        <p className="eval-meta">{item.id} · {(item.categories || []).join(' ') || '无分类'}{item.looseSelected ? ` · 宽松 #${item.loosePosition}` : ''}{item.inDigest ? ' · 当日已保存' : ''}</p>
+        <p className="eval-meta">信号：{(item.signals || []).join(', ') || '无'}</p>
+        <p className="eval-meta">粗筛：{reasonText(item.reason)}</p>
+        {item.screened && <p className="eval-meta">精筛：{item.screenRelevant ? '相关' : '不相关'} · {item.screenScore.toFixed(2)} · {item.screenReason}</p>}
+        {day.draft && <p className="eval-meta">草稿：{item.draftPushed ? `将推送 #${item.draftPosition}` : item.draftSelected ? `收集 #${item.draftPosition}，超出推送上限` : '未收集'} · tier {item.draftTier} · {reasonText(item.draftReason)}{(item.draftSignals || []).length ? ` · ${(item.draftSignals || []).join(', ')}` : ''}</p>}
+        <div className="eval-actions">
+          <button type="button" className="secondary" aria-pressed={item.label === 'relevant'} disabled={pendingID === item.id} onClick={() => label(item, 'relevant')}>相关</button>
+          <button type="button" className="secondary" aria-pressed={item.label === 'not_relevant'} disabled={pendingID === item.id} onClick={() => label(item, 'not_relevant')}>不相关</button>
+          <button type="button" className="secondary" disabled={pendingID === item.id || !item.label} onClick={() => label(item, 'clear')}>清除</button>
+        </div>
+      </article>)}
+    </section>)}
+  </div>
+}
+
+function idList(day: EvalDay, ids: string[]) {
+  if (!ids?.length) return <p className="eval-note">无</p>
+  return <ul>{ids.map(id => <li key={id}>{titleOf(day, id)}</li>)}</ul>
+}

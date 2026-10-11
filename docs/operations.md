@@ -29,7 +29,7 @@ Compose 仅运行一个副本，不要扩为多个定时 worker。宿主机、Do
 docker compose up -d --force-recreate paper-digest
 ```
 
-页面修改 Webhook 无需重启。仅更改 Compose 运行参数通常只需 `docker compose up -d`。停用自动任务可将 `delivery.enabled` 设为 `false` 后重新创建容器；这同时关闭采集和模型调用。`docker compose stop` 停止全部服务，`docker compose down` 移除容器和网络、保留命名卷；**不要运行 `docker compose down -v`，它会删除数据**。不同项目名会得到不同命名卷，迁移目录或加 `-p` 前须核对原卷。
+筛选规则在 `topics[].selection`。改规则时编辑宿主机上的 `config.json`，然后用上面的命令重新创建容器，不要加 `--build`。配置是只读挂载，没有热加载，重启后下一次日报才会使用新规则。页面修改 Webhook 无需重启。仅更改 Compose 运行参数通常只需 `docker compose up -d`。停用自动任务可将 `delivery.enabled` 设为 `false` 后重新创建容器；这同时关闭采集和模型调用。`docker compose stop` 停止全部服务，`docker compose down` 移除容器和网络、保留命名卷；**不要运行 `docker compose down -v`，它会删除数据**。不同项目名会得到不同命名卷，迁移目录或加 `-p` 前须核对原卷。
 
 ## 受控飞书试发
 
@@ -49,7 +49,7 @@ docker compose exec -T paper-digest paper-digest send-test --topic recommendatio
 
 ## 调度与状态
 
-- 08:00～09:00 创建或恢复当天任务；单 worker 逐篇生成，最多 5 篇。重启后在 09:00 前继续；09:01 起不再发起新投递；若在 09:00 的一分钟内启动且已有完整日报，仍可尝试发送。
+- 08:00～09:00 只创建或恢复当天任务。当天只采集一个 arXiv 公告日，先做规则粗筛，再调用精筛技能。精筛成功后按分数排序，只为推送上限内的论文生成摘要（默认 5 篇）。精筛在重试后失败，或拖到 09:00 仍没有合法结论时，当天不发送，任务记为 `missed`，原因写在任务消息里，可在 `status`、日报历史和筛选评估中看到。关掉进程不会把当天记成 missed。周日和周一没有新公告，写入空日报，不重复上一批。相关论文不足或精筛后没有相关论文时少发或空发，不把弱匹配补进名额。不补停机期间错过的日期。重启后在 09:00 前继续当天尚未失败的任务；09:01 起不再发起新投递；若在 09:00 的一分钟内启动且已有完整日报，仍可尝试发送。
 - 09:00:00～09:00:59 的窗口内只尝试一次，且仅发送 `ready` 的完整日报，每篇论文一张飞书 Markdown 卡片；空日报发送一条提示。未就绪记 `missed`。发送前持久化整批意图，每篇确认成功后立即记录推荐历史，全部成功才记 `sent`；中途失败停止后续发送并记 `unknown`，**不自动重发整批**，须先去目标群核对。
 - 论文 ID 使用不含 arXiv 版本号的稳定 ID；只有确认送达后才记已推荐。生成依据是公开原摘要，日报会明确标注，不能视为论文全文解读。
 - `Asia/Shanghai` 在程序中明确指定，不依赖容器时区环境变量。若机器休眠/断电/断网，不能保证 09:00 送达；请自行监控日志中的 `missed` / `unknown` 并保持 Docker Desktop 开机。

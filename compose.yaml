@@ -9,6 +9,7 @@ services:
     volumes:
       - digest-data:/data
       - ./config/config.json:/app/config/config.json:ro
+      - ./skills:/app/skills:ro
     healthcheck:
       test: ["CMD", "/usr/local/bin/paper-digest", "health"]
       interval: 30s

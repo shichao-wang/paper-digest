@@ -383,6 +383,57 @@ func TestMarkMissedCanAbandonReadyButNotSending(t *testing.T) {
 	}
 }
 
+func TestMarkMissedWithReasonFillsAnEmptyMissedMessage(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t, filepath.Join(t.TempDir(), "state.sqlite"))
+	defer store.Close()
+
+	raced, err := store.ClaimDay(ctx, "topic", "2026-09-26")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkMissed(ctx, "topic", raced.Date); err != nil {
+		t.Fatal(err)
+	}
+	reason := "精筛失败，当天不发送：已到 09:00"
+	if err := store.MarkMissedWithReason(ctx, "topic", raced.Date, reason); err != nil {
+		t.Fatal(err)
+	}
+	raced, err = store.GetJob(ctx, "topic", raced.Date)
+	if err != nil || raced.Status != statusMissed || raced.Message != reason {
+		t.Fatalf("missed reason = %+v, %v", raced, err)
+	}
+	if err := store.MarkMissedWithReason(ctx, "topic", raced.Date, "另一条原因"); err != nil {
+		t.Fatal(err)
+	}
+	raced, err = store.GetJob(ctx, "topic", raced.Date)
+	if err != nil || raced.Message != reason {
+		t.Fatalf("reason overwritten: %+v %v", raced, err)
+	}
+
+	direct, err := store.ClaimDay(ctx, "topic", "2026-09-27")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkMissedWithReason(ctx, "topic", direct.Date, "直接失败"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkMissedWithReason(ctx, "topic", direct.Date, "不能覆盖"); err != nil {
+		t.Fatal(err)
+	}
+	direct, err = store.GetJob(ctx, "topic", direct.Date)
+	if err != nil || direct.Status != statusMissed || direct.Message != "直接失败" {
+		t.Fatalf("direct reason = %+v, %v", direct, err)
+	}
+	if err := store.MarkMissed(ctx, "topic", direct.Date); err != nil {
+		t.Fatal(err)
+	}
+	direct, err = store.GetJob(ctx, "topic", direct.Date)
+	if err != nil || direct.Message != "直接失败" {
+		t.Fatalf("MarkMissed cleared the reason: %+v %v", direct, err)
+	}
+}
+
 func TestBackupCreatesRestorableSnapshotAndRejectsExistingDestination(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

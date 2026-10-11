@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -25,6 +26,7 @@ import (
 	"github.com/shichao-wang/paper-digest/internal/papers"
 	"github.com/shichao-wang/paper-digest/internal/state"
 	"github.com/shichao-wang/paper-digest/internal/web"
+	"github.com/shichao-wang/paper-digest/skills"
 )
 
 func main() {
@@ -49,7 +51,7 @@ func run(args []string) error {
 		configPath, args = args[1], args[2:]
 	}
 	if len(args) == 0 {
-		return errors.New("用法: paper-digest [--config <文件>] serve|health|status [日期]|preview <fixture.json>|backup <文件>|send-test --topic <id> --confirm")
+		return errors.New("用法: paper-digest [--config <文件>] serve|health|status [日期]|preview <fixture.json>|eval|backup <文件>|send-test --topic <id> --confirm")
 	}
 	if args[0] == "send-test" {
 		if len(args) != 4 || args[1] != "--topic" || args[2] == "" || args[3] != "--confirm" {
@@ -96,6 +98,13 @@ func run(args []string) error {
 		}
 		fmt.Print(digest.Render(time.Now(), items))
 		return nil
+	}
+	if args[0] == "eval" {
+		cfg, err := config.Load(configPath)
+		if err != nil {
+			return err
+		}
+		return runEval(context.Background(), cfg, args[1:])
 	}
 	if args[0] == "health" {
 		flags := flag.NewFlagSet("health", flag.ContinueOnError)
@@ -180,20 +189,70 @@ type serveDependencies struct {
 }
 
 func defaultWorker(cfg config.Config, store *state.Store) (worker, error) {
-	model := cfg.Anthropic.Model
+	model := strings.TrimSpace(cfg.Anthropic.Model)
 	if model == "" {
-		model = "claude-opus-5"
+		model = digest.DefaultModel
+	}
+	rules, _, ok := cfg.TopicSelection(job.Topic)
+	if !ok {
+		return nil, errors.New("主题 recommendation-advertising-search 没有筛选规则")
+	}
+	loaded, err := skills.Load(cfg.Skills.Dir)
+	if err != nil {
+		return nil, err
+	}
+	if err := cfg.ResolveSkills(loaded); err != nil {
+		return nil, err
+	}
+	screeningName, summaryName := cfg.SkillNames(job.Topic)
+	screeningSkill, err := loaded.Get(screeningName)
+	if err != nil {
+		return nil, err
+	}
+	summarySkill, err := loaded.Get(summaryName)
+	if err != nil {
+		return nil, err
 	}
 	return &job.Runner{
 		Store: store,
-		Fetch: func(ctx context.Context) ([]papers.Paper, error) {
-			fetchCtx, cancel := context.WithTimeout(ctx, 40*time.Second)
+		Fetch: func(ctx context.Context, batch papers.Batch) ([]papers.Paper, error) {
+			fetchCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
 			defer cancel()
-			return papers.Fetch(fetchCtx, &http.Client{Timeout: 40 * time.Second}, "", 100)
+			return papers.FetchWindow(fetchCtx, &http.Client{Timeout: 45 * time.Second}, "", batch.Window, rules.Query)
 		},
-		Analyzer: digest.ClaudeAnalyzer{Model: model, APIKey: cfg.Anthropic.APIKey, BaseURL: cfg.Anthropic.BaseURL},
-		Sender:   delivery.StoredFeishu{Store: store, Topic: job.Topic}, LookbackDays: cfg.Arxiv.LookbackDays, Now: time.Now,
+		Analyzer: digest.ClaudeAnalyzer{
+			Model: model, APIKey: cfg.Anthropic.APIKey, BaseURL: cfg.Anthropic.BaseURL,
+			Instruction: summarySkill.Body, Version: summarySkill.Version(),
+		},
+		Screen: digest.Screener{
+			Model: model, APIKey: cfg.Anthropic.APIKey, BaseURL: cfg.Anthropic.BaseURL,
+			Instruction: screeningSkill.Body, Skill: screeningSkill.Version(),
+		},
+		Sender: delivery.StoredFeishu{Store: store, Topic: job.Topic}, Now: time.Now,
+		Rules: rules,
 	}, nil
+}
+
+func selectionRules(cfg config.Config) map[string]papers.Rules {
+	out := map[string]papers.Rules{}
+	for _, topic := range cfg.Topics {
+		rules, _, ok := cfg.TopicSelection(topic.ID)
+		if ok {
+			out[topic.ID] = rules
+		}
+	}
+	return out
+}
+
+func selectionSpecs(cfg config.Config) map[string]papers.Selection {
+	out := map[string]papers.Selection{}
+	for _, topic := range cfg.Topics {
+		_, spec, ok := cfg.TopicSelection(topic.ID)
+		if ok {
+			out[topic.ID] = spec
+		}
+	}
+	return out
 }
 
 func openStore(ctx context.Context, cfg config.Config) (*state.Store, error) {
@@ -221,6 +280,26 @@ func serve(parent context.Context, cfg config.Config, options serveOptions, deps
 			return err
 		}
 	}
+	loaded, err := skills.Load(cfg.Skills.Dir)
+	if err != nil {
+		return err
+	}
+	if err := cfg.ResolveSkills(loaded); err != nil {
+		return err
+	}
+	screeningSkills := map[string]skills.Skill{}
+	for _, topic := range cfg.Topics {
+		name, _ := cfg.SkillNames(topic.ID)
+		skill, err := loaded.Get(name)
+		if err != nil {
+			return err
+		}
+		screeningSkills[topic.ID] = skill
+	}
+	model := strings.TrimSpace(cfg.Anthropic.Model)
+	if model == "" {
+		model = digest.DefaultModel
+	}
 	store, err := openStore(parent, cfg)
 	if err != nil {
 		return err
@@ -230,7 +309,22 @@ func serve(parent context.Context, cfg config.Config, options serveOptions, deps
 	if staticFS == nil {
 		staticFS = os.DirFS(options.WebDir)
 	}
-	handler, err := web.New(store, staticFS, web.Options{DeliveryEnabled: cfg.Delivery.Enabled, Topics: cfg.Topics})
+	handler, err := web.New(store, staticFS, web.Options{
+		DeliveryEnabled: cfg.Delivery.Enabled,
+		Topics:          cfg.Topics,
+		Rules:           selectionRules(cfg),
+		Selections:      selectionSpecs(cfg),
+		ScreeningSkills: screeningSkills,
+		Screen: func(ctx context.Context, instruction string, list []papers.Paper) ([]digest.Decision, error) {
+			return (digest.Screener{
+				Model: model, APIKey: cfg.Anthropic.APIKey, BaseURL: cfg.Anthropic.BaseURL,
+				Instruction: instruction,
+			}).Screen(ctx, list)
+		},
+		Fetch: func(ctx context.Context, window papers.Window, searchQuery string) ([]papers.Paper, error) {
+			return papers.FetchWindow(ctx, &http.Client{Timeout: 45 * time.Second}, "", window, searchQuery)
+		},
+	})
 	if err != nil {
 		return err
 	}
@@ -281,7 +375,8 @@ func serve(parent context.Context, cfg config.Config, options serveOptions, deps
 			defer handlers.Done()
 			handler.ServeHTTP(w, r)
 		}),
-		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 15 * time.Second,
+		// 写超时要盖住筛选评估里的 arXiv 抓取；其余接口本身很快。
+		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 4 * time.Minute,
 		IdleTimeout: 60 * time.Second, BaseContext: func(net.Listener) context.Context { return ctx },
 	}
 	httpDone := make(chan error, 1)

@@ -10,13 +10,30 @@ import (
 	"os"
 	"regexp"
 	"strings"
+
+	"github.com/shichao-wang/paper-digest/internal/papers"
+	"github.com/shichao-wang/paper-digest/skills"
 )
 
 var topicIDPattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
 
+// builtinSelectionTopic keeps the current recommendation, advertising, and
+// search filter when an existing config omits topics[].selection.
+const builtinSelectionTopic = "recommendation-advertising-search"
+
 type Topic struct {
-	ID         string `json:"id"`
-	WebhookURL string `json:"webhook_url"`
+	ID         string            `json:"id"`
+	WebhookURL string            `json:"webhook_url"`
+	Selection  *papers.Selection `json:"selection,omitempty"`
+	Skills     *TopicSkills      `json:"skills,omitempty"`
+	rules      papers.Rules      `json:"-"`
+}
+
+// TopicSkills names the screening and summary skills for one topic.
+// Empty names use paper-screening and paper-summary.
+type TopicSkills struct {
+	Screening string `json:"screening,omitempty"`
+	Summary   string `json:"summary,omitempty"`
 }
 
 type Config struct {
@@ -31,10 +48,15 @@ type Config struct {
 		Model   string `json:"model"`
 		BaseURL string `json:"base_url"`
 	} `json:"anthropic"`
-	Arxiv struct {
-		LookbackDays int `json:"lookback_days"`
-	} `json:"arxiv"`
+	Skills struct {
+		Dir string `json:"dir,omitempty"`
+	} `json:"skills,omitempty"`
 	Topics []Topic `json:"topics"`
+}
+
+func removedArxivField(err error) bool {
+	message := err.Error()
+	return strings.Contains(message, `unknown field "lookback_days"`) || strings.Contains(message, `unknown field "arxiv"`)
 }
 
 func Load(path string) (Config, error) {
@@ -46,6 +68,9 @@ func Load(path string) (Config, error) {
 	decoder.DisallowUnknownFields()
 	var cfg Config
 	if err := decoder.Decode(&cfg); err != nil {
+		if removedArxivField(err) {
+			return Config{}, errors.New("arxiv.lookback_days 已删除，日报改为每个北京时间日期只采集一个 arXiv 公告日。请从配置中去掉 lookback_days；如果 arxiv 段因此没有其他字段，把整个 arxiv 段删掉，保存后执行 docker compose up -d --force-recreate paper-digest")
+		}
 		return Config{}, errors.New("解析配置失败：JSON 格式或字段不合法")
 	}
 	if err := decoder.Decode(new(any)); err != io.EOF {
@@ -63,6 +88,13 @@ func Load(path string) (Config, error) {
 			return Config{}, errors.New("主题 ID 重复")
 		}
 		seen[topic.ID] = true
+		if topic.Skills != nil {
+			topic.Skills.Screening = strings.TrimSpace(topic.Skills.Screening)
+			topic.Skills.Summary = strings.TrimSpace(topic.Skills.Summary)
+			if (topic.Skills.Screening != "" && !topicIDPattern.MatchString(topic.Skills.Screening)) || (topic.Skills.Summary != "" && !topicIDPattern.MatchString(topic.Skills.Summary)) {
+				return Config{}, errors.New("技能名称只能使用小写字母、数字与连字符")
+			}
+		}
 	}
 	if baseURL := strings.TrimSpace(cfg.Anthropic.BaseURL); baseURL != "" {
 		parsed, err := url.Parse(baseURL)
@@ -71,10 +103,78 @@ func Load(path string) (Config, error) {
 		}
 		cfg.Anthropic.BaseURL = baseURL
 	}
-	if cfg.Arxiv.LookbackDays < 1 || cfg.Arxiv.LookbackDays > 30 {
-		return Config{}, errors.New("arxiv.lookback_days 必须为 1 到 30")
+	cfg.Skills.Dir = strings.TrimSpace(cfg.Skills.Dir)
+	for i := range cfg.Topics {
+		topic := &cfg.Topics[i]
+		if topic.Selection == nil {
+			if topic.ID == builtinSelectionTopic {
+				topic.rules = papers.DefaultRules()
+			}
+			continue
+		}
+		compiled, err := papers.Compile(*topic.Selection)
+		if err != nil {
+			return Config{}, fmt.Errorf("主题 %s 的筛选规则无效: %w", topic.ID, err)
+		}
+		topic.rules = compiled
 	}
 	return cfg, nil
+}
+
+// TopicSelection returns the compiled rules and the JSON spec for a topic.
+// The joint topic uses the built-in rules when selection is omitted, including
+// for a Config value that was not loaded from JSON.
+func (c Config) TopicSelection(id string) (papers.Rules, papers.Selection, bool) {
+	for _, topic := range c.Topics {
+		if topic.ID != id {
+			continue
+		}
+		if topic.rules.Active() {
+			if topic.Selection != nil {
+				return topic.rules, *topic.Selection, true
+			}
+			if id == builtinSelectionTopic {
+				return topic.rules, papers.DefaultSelection(), true
+			}
+			return topic.rules, papers.Selection{}, true
+		}
+		if topic.Selection == nil && id == builtinSelectionTopic {
+			return papers.DefaultRules(), papers.DefaultSelection(), true
+		}
+		return papers.Rules{}, papers.Selection{}, false
+	}
+	return papers.Rules{}, papers.Selection{}, false
+}
+
+// SkillNames returns the screening and summary skill names for a topic.
+func (c Config) SkillNames(id string) (string, string) {
+	screening, summary := skills.Screening, skills.Summary
+	for _, topic := range c.Topics {
+		if topic.ID != id || topic.Skills == nil {
+			continue
+		}
+		if topic.Skills.Screening != "" {
+			screening = topic.Skills.Screening
+		}
+		if topic.Skills.Summary != "" {
+			summary = topic.Skills.Summary
+		}
+	}
+	return screening, summary
+}
+
+// ResolveSkills checks that every topic's skills can be loaded.
+func (c Config) ResolveSkills(set skills.Set) error {
+	for _, topic := range c.Topics {
+		screening, summary := c.SkillNames(topic.ID)
+		if _, err := set.Get(screening); err != nil {
+			return fmt.Errorf("主题 %s 的精筛技能无效: %w", topic.ID, err)
+		}
+		if _, err := set.Get(summary); err != nil {
+			return fmt.Errorf("主题 %s 的摘要技能无效: %w", topic.ID, err)
+		}
+	}
+	return nil
 }
 
 func (c Config) Webhook(topicID string) (string, error) {

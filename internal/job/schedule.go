@@ -2,12 +2,14 @@ package job
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
 )
 
-// Serve 只在本机容器内调度；重启后仅恢复当天且仍在发送时间前的生成任务。
+// Serve 只处理当天的北京时间日期。08:00～09:00 创建或恢复当天任务；
+// 09:00 的一分钟内只发送当天已就绪的日报。09:01 起把当天未完成的任务记为 missed，不补发，也不补停机期间错过的日期。
 func (r *Runner) Serve(ctx context.Context, logger *slog.Logger) error {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
@@ -39,7 +41,9 @@ func (r *Runner) serve(ctx context.Context, logger *slog.Logger, ticks <-chan ti
 					deadline := time.Date(now.Year(), now.Month(), now.Day(), 9, 0, 0, 0, beijing())
 					workCtx, cancel := context.WithDeadline(ctx, deadline)
 					defer cancel()
-					if err := r.Generate(workCtx, date); err != nil && workCtx.Err() == nil {
+					if err := r.Generate(workCtx, date); err != nil && errors.Is(err, errScreeningClosed) {
+						logger.Error("精筛失败，当天不发送", "date", date, "error", err)
+					} else if err != nil && workCtx.Err() == nil {
 						logger.Error("日报生成未完成，稍后重试", "date", date, "error", err)
 					}
 				}()

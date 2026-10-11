@@ -23,8 +23,8 @@ func TestServeWaitsForBackgroundWorkAndDeliveryOutcome(t *testing.T) {
 			defer cancel()
 			entered, canceled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
 			if kind == "generate" {
-				r.Now = func() time.Time { return time.Date(2099, 9, 27, 8, 1, 0, 0, beijing()) }
-				r.Fetch = func(ctx context.Context) ([]papers.Paper, error) {
+				r.Now = func() time.Time { return time.Date(2099, 9, 26, 8, 1, 0, 0, beijing()) }
+				r.Fetch = func(ctx context.Context, _ papers.Batch) ([]papers.Paper, error) {
 					close(entered)
 					<-ctx.Done()
 					close(canceled)
@@ -87,7 +87,7 @@ func TestNoWebhookDoesNotBecomeUnknownOrSendAfterWindow(t *testing.T) {
 	}
 	read := make(chan struct{})
 	r.Sender = delivery.StoredFeishu{Store: webhookReadStore{store: r.Store, read: read}, Topic: Topic}
-	r.Now = func() time.Time { return time.Date(2026, 9, 27, 9, 0, 0, 0, beijing()) }
+	r.Now = func() time.Time { return time.Date(2026, 9, 26, 9, 0, 0, 0, beijing()) }
 	wait, cancel := context.WithCancel(ctx)
 	done := make(chan error, 1)
 	go func() { done <- r.Serve(wait, slog.New(slog.NewTextHandler(io.Discard, nil))) }()
@@ -106,7 +106,7 @@ func TestNoWebhookDoesNotBecomeUnknownOrSendAfterWindow(t *testing.T) {
 	if jobStatus(t, r, date) != "ready" {
 		t.Fatal("缺地址不得标记unknown")
 	}
-	r.Now = func() time.Time { return time.Date(2026, 9, 27, 9, 1, 0, 0, beijing()) }
+	r.Now = func() time.Time { return time.Date(2026, 9, 26, 9, 1, 0, 0, beijing()) }
 	calls := 0
 	r.Sender = senderFunc(func(context.Context, string) error { calls++; return nil })
 	wait, cancel = context.WithTimeout(ctx, 100*time.Millisecond)
@@ -191,7 +191,7 @@ func TestContinuousScheduleMissesUnconfiguredWebhookWithoutLateSend(t *testing.T
 	}
 	r.Sender = sender
 	advance := startSchedule(t, r)
-	at := time.Date(2026, 9, 27, 9, 0, 0, 0, beijing())
+	at := time.Date(2026, 9, 26, 9, 0, 0, 0, beijing())
 	advance(at)
 	select {
 	case err := <-sender.prepared:
@@ -245,7 +245,7 @@ func TestContinuousSchedulePreservesDeliveryOutcomeWithoutDuplicateSend(t *testi
 				return nil
 			})
 			advance := startSchedule(t, r)
-			at := time.Date(2026, 9, 27, 9, 0, 0, 0, beijing())
+			at := time.Date(2026, 9, 26, 9, 0, 0, 0, beijing())
 			advance(at)
 			select {
 			case <-entered:
@@ -276,7 +276,7 @@ func TestStartupAfterSendWindowMissesReadyJob(t *testing.T) {
 	if err := r.Generate(ctx, date); err != nil {
 		t.Fatal(err)
 	}
-	r.Now = func() time.Time { return time.Date(2026, 9, 27, 9, 1, 0, 0, beijing()) }
+	r.Now = func() time.Time { return time.Date(2026, 9, 26, 9, 1, 0, 0, beijing()) }
 	sent := false
 	r.Sender = senderFunc(func(context.Context, string) error { sent = true; return nil })
 	wait, stop := context.WithTimeout(ctx, 100*time.Millisecond)

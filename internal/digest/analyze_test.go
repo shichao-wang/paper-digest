@@ -58,7 +58,7 @@ func TestClaudeAnalyzerUsesConfiguredModelAndTraceablePrompt(t *testing.T) {
 	if !called {
 		t.Fatal("injected request was not called")
 	}
-	if got.Text != "摘要正文" || got.Model != "group/deepseek-v4-1-flash" || got.PromptVersion != promptVersion {
+	if got.Text != "摘要正文" || got.Model != "group/deepseek-v4-1-flash" || !strings.HasPrefix(got.PromptVersion, "paper-summary@") {
 		t.Errorf("Analyze() = %#v", got)
 	}
 }
@@ -66,8 +66,8 @@ func TestClaudeAnalyzerUsesConfiguredModelAndTraceablePrompt(t *testing.T) {
 func TestClaudeAnalyzerDefaultsModelAndRejectsEmptyResult(t *testing.T) {
 	analyzer := ClaudeAnalyzer{
 		request: func(_ context.Context, _, _, model, _ string) (string, error) {
-			if model != defaultModel {
-				t.Errorf("model = %q, want default %q", model, defaultModel)
+			if model != DefaultModel {
+				t.Errorf("model = %q, want default %q", model, DefaultModel)
 			}
 			return " \n ", nil
 		},
@@ -108,10 +108,18 @@ func TestRequestClaudeRoutesToConfiguredGateway(t *testing.T) {
 			t.Error("模型请求路径或认证不符合预期")
 		}
 		var body struct {
-			Model string `json:"model"`
+			Model     string `json:"model"`
+			MaxTokens int64  `json:"max_tokens"`
+			Thinking  struct {
+				Type         string `json:"type"`
+				BudgetTokens int64  `json:"budget_tokens"`
+			} `json:"thinking"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Model != "group/deepseek-v4-1-flash" {
 			t.Error("模型请求未使用指定模型")
+		}
+		if body.MaxTokens != maxOutputTokens || body.Thinking.Type != "enabled" || body.Thinking.BudgetTokens != thinkingBudget {
+			t.Errorf("thinking request = %+v", body)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":"msg_test","type":"message","role":"assistant","model":"group/deepseek-v4-1-flash","content":[{"type":"text","text":"测试摘要"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))

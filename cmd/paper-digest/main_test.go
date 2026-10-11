@@ -18,7 +18,7 @@ import (
 func configArgs(t *testing.T, database, webhook, apiKey string, enabled bool, args ...string) []string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.json")
-	data := fmt.Sprintf(`{"database":{"path":%q},"delivery":{"enabled":%t},"anthropic":{"api_key":%q,"model":"claude-opus-5"},"arxiv":{"lookback_days":7},"topics":[{"id":"recommendation-advertising-search","webhook_url":""},{"id":"another","webhook_url":%q}]}`, database, enabled, apiKey, webhook)
+	data := fmt.Sprintf(`{"database":{"path":%q},"delivery":{"enabled":%t},"anthropic":{"api_key":%q,"model":"claude-opus-5"},"topics":[{"id":"recommendation-advertising-search","webhook_url":""},{"id":"another","webhook_url":%q}]}`, database, enabled, apiKey, webhook)
 	if err := os.WriteFile(path, []byte(data), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +109,7 @@ func TestSendTestMigratesLegacyURLButNeverRevivesClearedSetting(t *testing.T) {
 	defer server.Close()
 	database := filepath.Join(t.TempDir(), "settings.db")
 	configPath := filepath.Join(t.TempDir(), "legacy.json")
-	text := fmt.Sprintf(`{"database":{"path":%q},"arxiv":{"lookback_days":7},"topics":[{"id":%q,"webhook_url":%q}]}`, database, job.Topic, "  "+server.URL+"/legacy-secret  ")
+	text := fmt.Sprintf(`{"database":{"path":%q},"topics":[{"id":%q,"webhook_url":%q}]}`, database, job.Topic, "  "+server.URL+"/legacy-secret  ")
 	if err := os.WriteFile(configPath, []byte(text), 0600); err != nil {
 		t.Fatal(err)
 	}
