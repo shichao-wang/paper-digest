@@ -10,16 +10,33 @@
     "model": "deepseek-flash",
     "base_url": "https://api.deepseek.com/anthropic"
   },
+  "agents": {
+    "screening": {
+      "skill": "paper-screening",
+      "max_tokens": 16384,
+      "timeout_seconds": 180,
+      "batch_size": 8,
+      "concurrency": 2,
+      "thinking": {
+        "budget_tokens": 2048
+      }
+    },
+    "summary": {
+      "skill": "paper-summary",
+      "max_tokens": 8192,
+      "timeout_seconds": 120,
+      "concurrency": 2,
+      "thinking": {
+        "budget_tokens": 2048
+      }
+    }
+  },
   "skills": {
     "dir": "/app/skills"
   },
   "topics": [
     {
       "id": "recommendation-advertising-search",
-      "skills": {
-        "screening": "paper-screening",
-        "summary": "paper-summary"
-      },
       "selection": {
         "max_papers": 5,
         "min_tier": 1,

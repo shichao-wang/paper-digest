@@ -24,6 +24,8 @@ docker compose logs --tail=100 paper-digest
 
 启用自动任务前，按 [配置说明](docs/configuration.md) 填写模型服务信息，在页面「主题管理」保存 Webhook，并按 [受控试发流程](docs/operations.md#受控飞书试发) 核对目标群与消息。再将 `delivery.enabled` 改为 `true`、重新创建容器；模型调用会产生费用，机器与 Docker 必须在调度时段在线。
 
+`anthropic` 只写连接：`api_key`、`base_url` 和默认 `model`。精筛和摘要各自在 `agents.screening`、`agents.summary` 里配置模型（省略则用默认模型）、技能名、`max_tokens`、`timeout_seconds`、`concurrency`，精筛另有 `batch_size`，以及 `thinking.budget_tokens`。不写 `agents` 时使用内置默认。
+
 ## 本地开发与验证
 
 需要 Go 1.27、Node 24；离线界面演示另需 Python 3：

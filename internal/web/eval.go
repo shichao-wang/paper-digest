@@ -92,6 +92,12 @@ func (s *server) evalSkill(w http.ResponseWriter, r *http.Request) {
 	}{skill.Name, skill.Description, skill.Body})
 }
 
+const (
+	evalPreviewBudget     = 3 * time.Minute
+	evalScreenBudget      = 20 * time.Minute
+	evalScreenWriteMargin = time.Minute
+)
+
 func (s *server) evalPreview(w http.ResponseWriter, r *http.Request) {
 	topic, active, ok := s.requireSelection(w, r)
 	if !ok {
@@ -121,7 +127,21 @@ func (s *server) evalPreview(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid query parameters")
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
+	budget := evalPreviewBudget
+	if screen {
+		// Screening calls can think for a few minutes each. One announcement
+		// is several batches; 20 minutes covers that plus the arXiv fetch.
+		// The server WriteTimeout is only a few minutes, so extend this
+		// response's write deadline to the budget plus a margin. Other
+		// handlers keep the global timeout.
+		budget = evalScreenBudget
+		err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(budget + evalScreenWriteMargin))
+		if err != nil && !errors.Is(err, http.ErrNotSupported) {
+			writeError(w, http.StatusServiceUnavailable, "service unavailable")
+			return
+		}
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), budget)
 	defer cancel()
 	fetch := s.fetch
 	if fetch == nil {

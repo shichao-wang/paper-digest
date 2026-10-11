@@ -13,11 +13,24 @@
 | `anthropic.api_key` | 空字符串 | 启用 worker 时必须非空；从配置读取 |
 | `anthropic.model` | 示例为 `deepseek-flash`；配置留空时代码回退为 `deepseek-flash` | 按所用服务实际支持的模型填写。已写明的模型名会照用，不会被示例改掉 |
 | `anthropic.base_url` | 示例为 `https://api.deepseek.com/anthropic` | 兼容 Anthropic Messages API 的服务根地址，不要额外加 `/v1`。留空则使用默认 Anthropic API。自定义地址要求 HTTP/HTTPS、无 URL 凭据、查询参数或片段 |
+| `agents.screening.model` | 省略 | 省略时用 `anthropic.model`，仍空则是 `deepseek-flash`。与摘要的模型互不影响 |
+| `agents.screening.skill` | `paper-screening` | 精筛阶段的默认技能名，从 `skills.dir` 或内嵌技能加载。小写字母开头，只能用小写字母、数字和连字符。不是文件路径 |
+| `agents.screening.max_tokens` | `16384` | 精筛单次输出上限，含思考。省略时用此默认。允许 4096～65536 |
+| `agents.screening.timeout_seconds` | `180` | 精筛单次请求超时。省略时用此默认。允许 30～600 |
+| `agents.screening.batch_size` | `8` | 每批交给模型的论文数。省略时用此默认。允许 1～16 |
+| `agents.screening.concurrency` | `2` | 同时进行的精筛批次数。省略时用此默认。允许 1～4 |
+| `agents.screening.thinking.budget_tokens` | `2048` | 思考保持开启。省略时用此默认。允许 1024 到该阶段 `max_tokens` 减 1。DeepSeek 忽略这个预算，思考计入 `max_tokens` |
+| `agents.summary.model` | 省略 | 同精筛：省略时用 `anthropic.model`，仍空则是 `deepseek-flash` |
+| `agents.summary.skill` | `paper-summary` | 摘要阶段的默认技能名，规则同精筛 |
+| `agents.summary.max_tokens` | `8192` | 单篇摘要的输出上限，含思考。省略时用此默认。允许 4096～65536 |
+| `agents.summary.timeout_seconds` | `120` | 单篇摘要超时。省略时用此默认。允许 30～600 |
+| `agents.summary.concurrency` | `2` | 同时生成的摘要数。省略时用此默认。允许 1～4 |
+| `agents.summary.thinking.budget_tokens` | `2048` | 同精筛。摘要没有 `batch_size`，写了会拒绝加载 |
 | `skills.dir` | 示例为 `/app/skills`，可省略 | 省略时只用程序内嵌的技能。填写时该目录必须存在，其中合法的 `技能名/SKILL.md` 会覆盖同名内嵌技能；文件无效则拒绝启动 |
 | `topics[].id` | `recommendation-advertising-search` | 至少一个，唯一，以小写字母开头，后续用小写字母、数字和分隔用连字符 |
 | `topics[].webhook_url` | 新配置省略 | 仅用于旧配置迁移；新地址通过页面保存到 SQLite |
 | `topics[].selection` | 联合主题省略时使用内置规则 | 该主题的 arXiv 查询、屏蔽、信号、分档和每日上限。见下文 |
-| `topics[].skills` | 可省略 | `screening` 与 `summary` 默认是 `paper-screening`、`paper-summary` |
+| `topics[].skills` | 可省略 | 只替换该主题。`screening` 或 `summary` 非空时覆盖对应的 `agents.*.skill`；省略则用阶段上的技能名 |
 
 使用 [Compose 示例](../config/config.example.json) 或 [宿主机示例](../config/config.local.example.json)；对应的实际配置 `config/config.json`、`config/config.local.json` 均被 Git 和 Docker 构建忽略。配置没有热加载，Webhook 通过数据库动态读取。直接运行 CLI 默认读取工作目录下的 `config/config.json`，其他路径在子命令前指定 `--config <文件>`；`health` 和 `preview` 不读取配置。`eval` 读取数据库路径和主题的 `selection`。没有 `selection` 的旧配置仍能加载。配置里不能再写 `arxiv` 或 `lookback_days`，见下方迁移。
 
@@ -33,7 +46,7 @@
 
 模型面对的说明在 `skills/paper-screening/SKILL.md` 和 `skills/paper-summary/SKILL.md`。每份都是 Agent Skill：YAML 前言含 `name` 和 `description`，后面是 Markdown 说明。`name` 必须和文件夹名一致。摘要技能决定中文要点怎么写，飞书卡片仍使用 `- **标签**：正文`。精筛技能决定粗筛候选里哪些真正相关；输出必须是严格 JSON，运行时会再校验。
 
-`skills.dir` 留空时使用编进二进制的这两份。要改完即生效、又不重建镜像，把目录设成挂载路径。Compose 示例把仓库的 `./skills` 只读挂到 `/app/skills`，示例配置的 `skills.dir` 就是这个路径。宿主机直接运行可以用 `"dir": "skills"`。目录里没有某个技能时仍用内嵌副本；目录里的 `SKILL.md` 无效，或者 `name` 和文件夹不一致，进程会报错退出，不会悄悄退回内嵌文件。`topics[].skills.screening` 和 `topics[].skills.summary` 可选，默认就是上面两个名字。
+`skills.dir` 留空时使用编进二进制的这两份。要改完即生效、又不重建镜像，把目录设成挂载路径。Compose 示例把仓库的 `./skills` 只读挂到 `/app/skills`，示例配置的 `skills.dir` 就是这个路径。宿主机直接运行可以用 `"dir": "skills"`。目录里没有某个技能时仍用内嵌副本；目录里的 `SKILL.md` 无效，或者 `name` 和文件夹不一致，进程会报错退出，不会悄悄退回内嵌文件。阶段默认技能名写在 `agents.screening.skill` 和 `agents.summary.skill`，省略时就是上面两个名字。`topics[].skills.screening` 和 `topics[].skills.summary` 可选，写了就只替换该主题的对应阶段。
 
 精筛失败没有开关：重试耗尽、或生成截止（北京时间 09:00）到达时，当天不发送粗筛结果，任务记为 `missed`，原因出现在 `status`、日报历史和筛选评估里。关掉进程导致的取消不会记成 missed。
 
@@ -63,7 +76,9 @@ docker compose up -d --force-recreate paper-digest
 
 ## 模型网关
 
-使用兼容 Anthropic Messages API 的服务时，将 `anthropic.base_url` 填为服务根地址（不额外添加 `/v1`），并配置密钥和模型名称。示例指向 DeepSeek 的 Anthropic 兼容地址和 `deepseek-flash`。请求会开启思考，`budget_tokens` 为 2048，`max_tokens` 为 4096。宿主机直接运行 CLI 若走本地网关，可用 `http://127.0.0.1:3425`；Docker Desktop 容器应使用 `http://host.docker.internal:3425` 访问宿主机。`base_url` 留空时使用默认 Anthropic API 地址。配置后仍保持 `delivery.enabled=false`，直至完成飞书试发和投递确认。
+使用兼容 Anthropic Messages API 的服务时，将 `anthropic.base_url` 填为服务根地址（不额外添加 `/v1`），并配置密钥和默认模型名称。示例指向 DeepSeek 的 Anthropic 兼容地址和 `deepseek-flash`。`anthropic` 只保留这三项。精筛和摘要各自写在顶层 `agents.screening` 与 `agents.summary`：模型、技能名、`max_tokens`、超时、并发，精筛另有 `batch_size`，以及 `thinking.budget_tokens`。阶段上的 `model` 省略时用 `anthropic.model`。不写 `agents`，或只写其中一部分字段，其余用内置默认：精筛 `max_tokens` 16384、超时 180 秒、每批 8 篇、并发 2、技能 `paper-screening`；摘要 `max_tokens` 8192、超时 120 秒、并发 2、技能 `paper-summary`。两边的思考预算默认 2048，必须小于该阶段的 `max_tokens`。思考保持开启。DeepSeek 的 Anthropic 兼容接口会忽略 `budget_tokens`，思考占用的是 `max_tokens` 整段输出额度。已经部署、只有 `anthropic.api_key`、`model`、`base_url` 的配置不用加 `agents` 也能加载。把 `screening` 或 `summary` 写进 `anthropic` 会拒绝启动，并提示改到 `agents`。改完保存后重新创建容器即可，不必重新构建镜像。若响应仍是 `stop_reason=max_tokens`，错误里会写上这次使用的 `max_tokens` 和 `budget_tokens`。宿主机直接运行 CLI 若走本地网关，可用 `http://127.0.0.1:3425`；Docker Desktop 容器应使用 `http://host.docker.internal:3425` 访问宿主机。`base_url` 留空时使用默认 Anthropic API 地址。配置后仍保持 `delivery.enabled=false`，直至完成飞书试发和投递确认。
+
+按上述默认值，约 30 篇粗筛候选是 4 个精筛批次，并发 2，也就是两轮。每一批最多 3 次，一次按 180 秒计，同一轮并行，所以一轮最多 9 分钟，两轮是 18 分钟。摘要每次只请求一次：最多 `max_papers` 篇（默认 5）并发 2，大约三轮，每轮 120 秒，一共 6 分钟。再留 1 分钟给落库。加上采集的几分钟，计划上的上限大约半小时，落在 08:00 开始、09:00 截止的窗口里。启动精筛前会按每一批都会用满 3 次来检查剩余时间；来不及完成就记为 `missed` 且不调用模型。输出令牌按实际生成计费，`max_tokens` 只是上限。
 
 ## 旧环境变量迁移与重载
 

@@ -432,6 +432,22 @@ func TestMarkMissedWithReasonFillsAnEmptyMissedMessage(t *testing.T) {
 	if err != nil || direct.Message != "直接失败" {
 		t.Fatalf("MarkMissed cleared the reason: %+v %v", direct, err)
 	}
+
+	processing, err := store.ClaimDay(ctx, "topic", "2026-09-28")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveCandidates(ctx, "topic", processing.Date, []papers.Paper{{ID: "paper-id", Version: "1", Title: "pending"}}); err != nil {
+		t.Fatal(err)
+	}
+	reason = "剩余摘要来不及在截止前完成，当天不发送：距离截止还剩 1s"
+	if err := store.MarkMissedWithReason(ctx, "topic", processing.Date, reason); err != nil {
+		t.Fatal(err)
+	}
+	processing, err = store.GetJob(ctx, "topic", processing.Date)
+	if err != nil || processing.Status != statusMissed || processing.Message != reason {
+		t.Fatalf("processing close = %+v %v", processing, err)
+	}
 }
 
 func TestBackupCreatesRestorableSnapshotAndRejectsExistingDestination(t *testing.T) {

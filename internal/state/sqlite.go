@@ -764,9 +764,10 @@ UPDATE jobs SET status = ? WHERE topic = ? AND date = ? AND status IN (?, ?, ?, 
 	return nil
 }
 
-// MarkMissedWithReason marks a not-yet-processed day missed and stores the reason.
-// If the scheduler already marked the day missed and left the message empty,
-// the reason is filled in. A reason that is already stored is left as-is.
+// MarkMissedWithReason marks a new or processing day missed and stores the reason.
+// Processing is a screened day whose summaries have not finished. If the
+// scheduler already marked the day missed and left the message empty, the
+// reason is filled in. A reason that is already stored is left as-is.
 // It does not rewrite a later state.
 func (s *Store) MarkMissedWithReason(ctx context.Context, topic, date, reason string) error {
 	reason = strings.TrimSpace(reason)
@@ -775,7 +776,7 @@ func (s *Store) MarkMissedWithReason(ctx context.Context, topic, date, reason st
 	}
 	result, err := s.db.ExecContext(ctx, `
 UPDATE jobs SET status = ?, message = ?
-WHERE topic = ? AND date = ? AND status = ?`, statusMissed, reason, topic, date, statusNew)
+WHERE topic = ? AND date = ? AND status IN (?, ?)`, statusMissed, reason, topic, date, statusNew, statusProcessing)
 	if err != nil {
 		return fmt.Errorf("mark daily job missed: %w", err)
 	}

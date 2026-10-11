@@ -295,6 +295,78 @@ func TestEvalAcceptsBodyOnlyScreeningSkill(t *testing.T) {
 	}
 }
 
+type writeDeadlineRecorder struct {
+	*httptest.ResponseRecorder
+	deadline time.Time
+	calls    int
+	err      error
+}
+
+func (w *writeDeadlineRecorder) SetWriteDeadline(deadline time.Time) error {
+	w.calls++
+	w.deadline = deadline
+	return w.err
+}
+
+func TestEvalScreeningExtendsWriteDeadline(t *testing.T) {
+	store, err := state.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	batch, ok, err := papers.DigestBatch("2026-10-09")
+	if err != nil || !ok {
+		t.Fatalf("batch ok=%v err=%v", ok, err)
+	}
+	strong := papers.Paper{ID: "arxiv:strong", Title: "Sequential Recommendation", Published: batch.Window.Through.Add(-time.Hour), Categories: []string{"cs.IR"}}
+	screenCalls := 0
+	handler, err := New(store, fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("fixture")}}, Options{
+		Topics: []config.Topic{{ID: job.Topic}},
+		Fetch: func(context.Context, papers.Window, string) ([]papers.Paper, error) {
+			return []papers.Paper{strong}, nil
+		},
+		Screen: func(context.Context, string, []papers.Paper) ([]digest.Decision, error) {
+			screenCalls++
+			return []digest.Decision{{ID: strong.ID, Relevant: true, Score: 0.8, Reason: "相关"}}, nil
+		},
+		ScreeningSkills: map[string]skills.Skill{
+			job.Topic: {Name: skills.Screening, Body: "只保留检索论文。"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rejected := &writeDeadlineRecorder{ResponseRecorder: httptest.NewRecorder(), err: errors.New("cannot extend write deadline")}
+	rejectReq := httptest.NewRequest(http.MethodPost, "/api/eval", strings.NewReader(`{"date":"2026-10-09","screen":true}`))
+	rejectReq.Host = "127.0.0.1:8081"
+	rejectReq.Header.Set("Content-Type", "application/json")
+	rejectReq.Header.Set("Origin", "http://127.0.0.1:8081")
+	handler.ServeHTTP(rejected, rejectReq)
+	if rejected.Code != http.StatusServiceUnavailable || rejected.calls != 1 || screenCalls != 0 {
+		t.Fatalf("rejected deadline status=%d calls=%d screen=%d body=%s", rejected.Code, rejected.calls, screenCalls, rejected.Body.String())
+	}
+
+	before := time.Now()
+	extended := &writeDeadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+	screenReq := httptest.NewRequest(http.MethodPost, "/api/eval", strings.NewReader(`{"date":"2026-10-09","screen":true}`))
+	screenReq.Host = "127.0.0.1:8081"
+	screenReq.Header.Set("Content-Type", "application/json")
+	screenReq.Header.Set("Origin", "http://127.0.0.1:8081")
+	handler.ServeHTTP(extended, screenReq)
+	got := extended.deadline.Sub(before)
+	want := evalScreenBudget + evalScreenWriteMargin
+	if extended.Code != http.StatusOK || extended.calls != 1 || screenCalls != 1 || got < want || got > want+3*time.Second {
+		t.Fatalf("screening deadline status=%d calls=%d screen=%d got=%s want=%s body=%s", extended.Code, extended.calls, screenCalls, got, want, extended.Body.String())
+	}
+
+	plain := &writeDeadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+	handler.ServeHTTP(plain, httptest.NewRequest(http.MethodGet, "/api/eval?date=2026-10-09", nil))
+	if plain.Code != http.StatusOK || plain.calls != 0 || screenCalls != 1 {
+		t.Fatalf("plain preview status=%d deadline calls=%d screen=%d", plain.Code, plain.calls, screenCalls)
+	}
+}
+
 func postEval(handler http.Handler, host, origin, body string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodPost, "/api/eval", strings.NewReader(body))
 	req.Host = host

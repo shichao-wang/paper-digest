@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/shichao-wang/paper-digest/internal/digest"
 	"github.com/shichao-wang/paper-digest/internal/papers"
 )
 
@@ -34,6 +35,110 @@ func TestModelGatewayConfig(t *testing.T) {
 		if err == nil || strings.Contains(err.Error(), "secret") {
 			t.Fatalf("应拒绝无效网关地址且不泄漏凭据: %v", err)
 		}
+	}
+}
+
+func TestAgentsArePerStageAndProviderStaysAConnection(t *testing.T) {
+	deployed := `{"anthropic":{"api_key":"k","model":"deepseek-flash","base_url":"https://api.deepseek.com/anthropic"},"topics":[{"id":"recommendation-advertising-search","skills":{"screening":"paper-screening","summary":"paper-summary"}}]}`
+	cfg, err := loadFixture(t, deployed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	screen, summary := cfg.ScreeningCall(), cfg.SummaryCall()
+	if screen.Model != "deepseek-flash" || summary.Model != "deepseek-flash" || screen.MaxTokens != digest.DefaultScreenMaxTokens || summary.MaxTokens != digest.DefaultSummaryMaxTokens || screen.ThinkingBudget != digest.ThinkingBudget || summary.Skill != "paper-summary" {
+		t.Fatalf("deployed config screen=%+v summary=%+v", screen, summary)
+	}
+	screening, summarizing := cfg.SkillNames(currentTopic)
+	if screening != "paper-screening" || summarizing != "paper-summary" {
+		t.Fatalf("topic skills = %s %s", screening, summarizing)
+	}
+
+	cfg, err = loadFixture(t, `{"anthropic":{"model":"deepseek-flash"},"agents":{"screening":{"model":"other-model","skill":"custom-screen","max_tokens":32768,"timeout_seconds":240,"batch_size":4,"concurrency":3,"thinking":{"budget_tokens":4096}},"summary":{"max_tokens":12288,"timeout_seconds":150,"concurrency":2}},"topics":[{"id":"recommendation-advertising-search"}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	screen, summary = cfg.ScreeningCall(), cfg.SummaryCall()
+	if screen.Model != "other-model" || screen.Skill != "custom-screen" || screen.MaxTokens != 32768 || screen.Timeout.Seconds() != 240 || screen.BatchSize != 4 || screen.Concurrency != 3 || screen.ThinkingBudget != 4096 {
+		t.Fatalf("screening agent = %+v", screen)
+	}
+	if summary.Model != "deepseek-flash" || summary.MaxTokens != 12288 || summary.Timeout.Seconds() != 150 || summary.Skill != "paper-summary" {
+		t.Fatalf("summary agent = %+v", summary)
+	}
+	if got, _ := cfg.SkillNames(currentTopic); got != "custom-screen" {
+		t.Fatalf("agent skill = %s", got)
+	}
+
+	cfg, err = loadFixture(t, `{"agents":{"screening":{"skill":"custom-screen"}},"topics":[{"id":"recommendation-advertising-search","skills":{"screening":"paper-screening"}}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := cfg.SkillNames(currentTopic); got != "paper-screening" {
+		t.Fatalf("topic skill should replace the agent default, got %s", got)
+	}
+
+	if _, err := loadFixture(t, `{"anthropic":{"api_key":"sk-test-secret","model":"deepseek-flash","base_url":"https://api.deepseek.com/anthropic","screening":{"max_tokens":16384}},"topics":[{"id":"recommendation-advertising-search"}]}`); err == nil || !strings.Contains(err.Error(), "agents.screening") || strings.Contains(err.Error(), "sk-test-secret") {
+		t.Fatalf("provider screening field error = %v", err)
+	}
+	if _, err := loadFixture(t, `{"agents":{"screening":{"max_tokens":100}},"topics":[{"id":"recommendation-advertising-search"}]}`); err == nil || !strings.Contains(err.Error(), "agents.screening.max_tokens") {
+		t.Fatalf("invalid max_tokens error = %v", err)
+	}
+	if _, err := loadFixture(t, `{"agents":{"summary":{"batch_size":4}},"topics":[{"id":"recommendation-advertising-search"}]}`); err == nil || !strings.Contains(err.Error(), "agents.summary") || !strings.Contains(err.Error(), "batch_size") {
+		t.Fatalf("summary batch error = %v", err)
+	}
+	if _, err := loadFixture(t, `{"agents":{"summary":{"batch_size":0}},"topics":[{"id":"recommendation-advertising-search"}]}`); err == nil || !strings.Contains(err.Error(), "batch_size") {
+		t.Fatalf("summary batch zero error = %v", err)
+	}
+	if _, err := loadFixture(t, `{"agents":{"screening":{"skill":"Not A Skill"}},"topics":[{"id":"recommendation-advertising-search"}]}`); err == nil || !strings.Contains(err.Error(), "agents.screening.skill") {
+		t.Fatalf("skill name error = %v", err)
+	}
+}
+
+func TestExplicitZeroLimitsAreRejectedAndOmittedLimitsUseDefaults(t *testing.T) {
+	deployed := `{"anthropic":{"api_key":"k","model":"deepseek-flash","base_url":"https://api.deepseek.com/anthropic"},"topics":[{"id":"recommendation-advertising-search"}]}`
+	cfg, err := loadFixture(t, deployed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	screen, summary := cfg.ScreeningCall(), cfg.SummaryCall()
+	if screen != cfg.withProviderModel(digest.DefaultScreeningCall()) || summary != cfg.withProviderModel(digest.DefaultSummaryCall()) {
+		t.Fatalf("three-field anthropic config screen=%+v summary=%+v", screen, summary)
+	}
+
+	cfg, err = loadFixture(t, `{"agents":{"screening":{"thinking":{}},"summary":{}},"topics":[{"id":"recommendation-advertising-search"}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	screen, summary = cfg.ScreeningCall(), cfg.SummaryCall()
+	if screen.MaxTokens != digest.DefaultScreenMaxTokens || screen.Timeout != digest.DefaultScreenTimeout || screen.BatchSize != digest.DefaultScreenBatchSize || screen.Concurrency != digest.DefaultScreenConcurrency || screen.ThinkingBudget != digest.ThinkingBudget {
+		t.Fatalf("omitted screening limits = %+v", screen)
+	}
+	if summary.MaxTokens != digest.DefaultSummaryMaxTokens || summary.Timeout != digest.DefaultSummaryTimeout || summary.Concurrency != digest.DefaultSummaryConcurrency || summary.ThinkingBudget != digest.ThinkingBudget {
+		t.Fatalf("omitted summary limits = %+v", summary)
+	}
+
+	cases := []struct {
+		name, body, path string
+	}{
+		{"screen-max-tokens", `{"agents":{"screening":{"max_tokens":0}},"topics":[{"id":"recommendation-advertising-search"}]}`, "agents.screening.max_tokens"},
+		{"screen-timeout", `{"agents":{"screening":{"timeout_seconds":0}},"topics":[{"id":"recommendation-advertising-search"}]}`, "agents.screening.timeout_seconds"},
+		{"screen-batch", `{"agents":{"screening":{"batch_size":0}},"topics":[{"id":"recommendation-advertising-search"}]}`, "agents.screening.batch_size"},
+		{"screen-concurrency", `{"agents":{"screening":{"concurrency":0}},"topics":[{"id":"recommendation-advertising-search"}]}`, "agents.screening.concurrency"},
+		{"screen-budget", `{"agents":{"screening":{"thinking":{"budget_tokens":0}}},"topics":[{"id":"recommendation-advertising-search"}]}`, "agents.screening.thinking.budget_tokens"},
+		{"screen-max-tokens-negative", `{"agents":{"screening":{"max_tokens":-1}},"topics":[{"id":"recommendation-advertising-search"}]}`, "agents.screening.max_tokens"},
+		{"summary-max-tokens", `{"agents":{"summary":{"max_tokens":0}},"topics":[{"id":"recommendation-advertising-search"}]}`, "agents.summary.max_tokens"},
+		{"summary-timeout", `{"agents":{"summary":{"timeout_seconds":0}},"topics":[{"id":"recommendation-advertising-search"}]}`, "agents.summary.timeout_seconds"},
+		{"summary-concurrency", `{"agents":{"summary":{"concurrency":0}},"topics":[{"id":"recommendation-advertising-search"}]}`, "agents.summary.concurrency"},
+		{"summary-budget", `{"agents":{"summary":{"thinking":{"budget_tokens":0}}},"topics":[{"id":"recommendation-advertising-search"}]}`, "agents.summary.thinking.budget_tokens"},
+		{"summary-batch-zero", `{"agents":{"summary":{"batch_size":0}},"topics":[{"id":"recommendation-advertising-search"}]}`, "agents.summary.batch_size"},
+		{"summary-batch-positive", `{"agents":{"summary":{"batch_size":4}},"topics":[{"id":"recommendation-advertising-search"}]}`, "agents.summary.batch_size"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := loadFixture(t, tc.body)
+			if err == nil || !strings.Contains(err.Error(), tc.path) {
+				t.Fatalf("error = %v, want field %s", err, tc.path)
+			}
+		})
 	}
 }
 

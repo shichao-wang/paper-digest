@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/shichao-wang/paper-digest/internal/digest"
 	"github.com/shichao-wang/paper-digest/internal/papers"
 	"github.com/shichao-wang/paper-digest/skills"
 )
@@ -36,6 +37,29 @@ type TopicSkills struct {
 	Summary   string `json:"summary,omitempty"`
 }
 
+// StageAgent is one pipeline stage's model agent. Nil numeric fields use defaults.
+// An explicit 0, or any other value outside the supported range, is rejected.
+// Model falls back to anthropic.model, then deepseek-flash. Skill is a loaded
+// skill name, not a file path. Thinking stays on; budget_tokens is the value
+// sent to Anthropic and is ignored by DeepSeek. Summary rejects any batch_size.
+type StageAgent struct {
+	Model          string `json:"model,omitempty"`
+	Skill          string `json:"skill,omitempty"`
+	MaxTokens      *int   `json:"max_tokens,omitempty"`
+	TimeoutSeconds *int   `json:"timeout_seconds,omitempty"`
+	BatchSize      *int   `json:"batch_size,omitempty"`
+	Concurrency    *int   `json:"concurrency,omitempty"`
+	Thinking       *struct {
+		BudgetTokens *int `json:"budget_tokens,omitempty"`
+	} `json:"thinking,omitempty"`
+}
+
+// Agents configures the screening and summary stages separately from the provider connection.
+type Agents struct {
+	Screening *StageAgent `json:"screening,omitempty"`
+	Summary   *StageAgent `json:"summary,omitempty"`
+}
+
 type Config struct {
 	Database struct {
 		Path string `json:"path"`
@@ -48,15 +72,23 @@ type Config struct {
 		Model   string `json:"model"`
 		BaseURL string `json:"base_url"`
 	} `json:"anthropic"`
+	Agents *Agents `json:"agents,omitempty"`
 	Skills struct {
 		Dir string `json:"dir,omitempty"`
 	} `json:"skills,omitempty"`
-	Topics []Topic `json:"topics"`
+	Topics    []Topic             `json:"topics"`
+	screening digest.CallSettings `json:"-"`
+	summary   digest.CallSettings `json:"-"`
 }
 
 func removedArxivField(err error) bool {
 	message := err.Error()
 	return strings.Contains(message, `unknown field "lookback_days"`) || strings.Contains(message, `unknown field "arxiv"`)
+}
+
+func agentFieldUnderProvider(err error) bool {
+	message := err.Error()
+	return strings.Contains(message, `unknown field "screening"`) || strings.Contains(message, `unknown field "summary"`)
 }
 
 func Load(path string) (Config, error) {
@@ -70,6 +102,9 @@ func Load(path string) (Config, error) {
 	if err := decoder.Decode(&cfg); err != nil {
 		if removedArxivField(err) {
 			return Config{}, errors.New("arxiv.lookback_days 已删除，日报改为每个北京时间日期只采集一个 arXiv 公告日。请从配置中去掉 lookback_days；如果 arxiv 段因此没有其他字段，把整个 arxiv 段删掉，保存后执行 docker compose up -d --force-recreate paper-digest")
+		}
+		if agentFieldUnderProvider(err) {
+			return Config{}, errors.New("精筛和摘要不写在 anthropic 里。anthropic 只保留 api_key、base_url 和默认 model；请把阶段设置写到顶层 agents.screening 和 agents.summary")
 		}
 		return Config{}, errors.New("解析配置失败：JSON 格式或字段不合法")
 	}
@@ -104,6 +139,9 @@ func Load(path string) (Config, error) {
 		cfg.Anthropic.BaseURL = baseURL
 	}
 	cfg.Skills.Dir = strings.TrimSpace(cfg.Skills.Dir)
+	if err := cfg.normalizeAgents(); err != nil {
+		return Config{}, err
+	}
 	for i := range cfg.Topics {
 		topic := &cfg.Topics[i]
 		if topic.Selection == nil {
@@ -146,9 +184,100 @@ func (c Config) TopicSelection(id string) (papers.Rules, papers.Selection, bool)
 	return papers.Rules{}, papers.Selection{}, false
 }
 
+func (c *Config) normalizeAgents() error {
+	var screening, summary StageAgent
+	if c.Agents != nil && c.Agents.Screening != nil {
+		screening = *c.Agents.Screening
+	}
+	if c.Agents != nil && c.Agents.Summary != nil {
+		summary = *c.Agents.Summary
+	}
+	if summary.BatchSize != nil {
+		return errors.New("agents.summary.batch_size 不能设置，摘要每次只处理一篇")
+	}
+	if err := validSkillName("agents.screening.skill", screening.Skill); err != nil {
+		return err
+	}
+	if err := validSkillName("agents.summary.skill", summary.Skill); err != nil {
+		return err
+	}
+	screenCall, err := digest.NormalizeScreen(agentInput(screening), "agents.screening")
+	if err != nil {
+		return err
+	}
+	summaryCall, err := digest.NormalizeSummary(agentInput(summary), "agents.summary")
+	if err != nil {
+		return err
+	}
+	c.screening = screenCall
+	c.summary = summaryCall
+	return nil
+}
+
+func agentInput(agent StageAgent) digest.CallInput {
+	in := digest.CallInput{
+		Model: agent.Model, Skill: agent.Skill, MaxTokens: agent.MaxTokens,
+		TimeoutSeconds: agent.TimeoutSeconds, BatchSize: agent.BatchSize, Concurrency: agent.Concurrency,
+	}
+	if agent.Thinking != nil {
+		in.BudgetTokens = agent.Thinking.BudgetTokens
+	}
+	return in
+}
+
+func validSkillName(field, name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+	if !topicIDPattern.MatchString(name) {
+		return fmt.Errorf("%s 只能使用小写字母、数字和连字符", field)
+	}
+	return nil
+}
+
+func (c Config) withProviderModel(call digest.CallSettings) digest.CallSettings {
+	if call.MaxTokens == 0 {
+		return call
+	}
+	if strings.TrimSpace(call.Model) == "" {
+		call.Model = strings.TrimSpace(c.Anthropic.Model)
+	}
+	if strings.TrimSpace(call.Model) == "" {
+		call.Model = digest.DefaultModel
+	}
+	return call
+}
+
+// ScreeningCall returns the screening agent. A Config that was not loaded from JSON gets the built-in defaults.
+// An omitted model uses anthropic.model, then deepseek-flash.
+func (c Config) ScreeningCall() digest.CallSettings {
+	call := c.screening
+	if call.MaxTokens == 0 {
+		call = digest.DefaultScreeningCall()
+	}
+	return c.withProviderModel(call)
+}
+
+// SummaryCall returns the summary agent. An omitted model uses anthropic.model, then deepseek-flash.
+func (c Config) SummaryCall() digest.CallSettings {
+	call := c.summary
+	if call.MaxTokens == 0 {
+		call = digest.DefaultSummaryCall()
+	}
+	return c.withProviderModel(call)
+}
+
 // SkillNames returns the screening and summary skill names for a topic.
+// agents.*.skill is the stage default. topics[].skills replaces it for that topic.
 func (c Config) SkillNames(id string) (string, string) {
-	screening, summary := skills.Screening, skills.Summary
+	screening, summary := c.ScreeningCall().Skill, c.SummaryCall().Skill
+	if screening == "" {
+		screening = skills.Screening
+	}
+	if summary == "" {
+		summary = skills.Summary
+	}
 	for _, topic := range c.Topics {
 		if topic.ID != id || topic.Skills == nil {
 			continue

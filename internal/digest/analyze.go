@@ -15,11 +15,6 @@ import (
 // DefaultModel is used when the config leaves anthropic.model empty.
 const DefaultModel = "deepseek-flash"
 
-const (
-	maxOutputTokens = 4096
-	thinkingBudget  = 2048
-)
-
 type Summary struct {
 	Text          string
 	Model         string
@@ -31,12 +26,15 @@ type Analyzer interface {
 }
 
 type ClaudeAnalyzer struct {
-	Model       string
-	APIKey      string
-	BaseURL     string
-	Instruction string
-	Version     string
-	request     func(context.Context, string, string, string, string) (string, error)
+	Model          string
+	APIKey         string
+	BaseURL        string
+	Instruction    string
+	Version        string
+	MaxTokens      int
+	Timeout        time.Duration
+	ThinkingBudget int
+	request        func(context.Context, string, string, string, string) (string, error)
 }
 
 func (a ClaudeAnalyzer) Analyze(ctx context.Context, paper papers.Paper) (Summary, error) {
@@ -60,11 +58,33 @@ func (a ClaudeAnalyzer) Analyze(ctx context.Context, paper papers.Paper) (Summar
 		version = skills.Version(skills.Summary, instruction)
 	}
 
+	maxTokens := a.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = DefaultSummaryMaxTokens
+	}
+	timeout := a.Timeout
+	if timeout <= 0 {
+		timeout = DefaultSummaryTimeout
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		if left := time.Until(deadline); left < timeout {
+			return Summary{}, fmt.Errorf("analyze arXiv paper %s: 剩余 %s，不够一次摘要请求（超时 %s，max_tokens=%d）", paper.ID, left.Round(time.Second), timeout, maxTokens)
+		}
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	budget := a.ThinkingBudget
+	if budget <= 0 {
+		budget = ThinkingBudget
+	}
 	request := a.request
 	if request == nil {
-		request = requestClaude
+		limit := maxTokens
+		request = func(ctx context.Context, apiKey, baseURL, model, prompt string) (string, error) {
+			return requestClaude(ctx, apiKey, baseURL, model, prompt, limit, budget)
+		}
 	}
-	text, err := request(ctx, a.APIKey, a.BaseURL, model, instruction+"\n\n"+paperSection(paper))
+	text, err := request(reqCtx, a.APIKey, a.BaseURL, model, instruction+"\n\n"+paperSection(paper))
 	if err != nil {
 		return Summary{}, fmt.Errorf("analyze arXiv paper %s: %w", paper.ID, err)
 	}
@@ -86,12 +106,18 @@ func newClaudeClient(apiKey, baseURL string, opts ...option.RequestOption) anthr
 	return anthropic.NewClient(append(options, opts...)...)
 }
 
-func requestClaude(ctx context.Context, apiKey, baseURL, model, prompt string) (string, error) {
+func requestClaude(ctx context.Context, apiKey, baseURL, model, prompt string, maxTokens, budgetTokens int) (string, error) {
+	if maxTokens <= 0 {
+		maxTokens = DefaultSummaryMaxTokens
+	}
+	if budgetTokens <= 0 {
+		budgetTokens = ThinkingBudget
+	}
 	client := newClaudeClient(apiKey, baseURL)
 	response, err := client.Messages.New(ctx, anthropic.MessageNewParams{
 		Model:     model,
-		MaxTokens: maxOutputTokens,
-		Thinking:  anthropic.ThinkingConfigParamOfEnabled(thinkingBudget),
+		MaxTokens: int64(maxTokens),
+		Thinking:  anthropic.ThinkingConfigParamOfEnabled(int64(budgetTokens)),
 		Messages: []anthropic.MessageParam{
 			anthropic.NewUserMessage(anthropic.NewTextBlock(prompt)),
 		},
@@ -100,9 +126,13 @@ func requestClaude(ctx context.Context, apiKey, baseURL, model, prompt string) (
 		return "", err
 	}
 
-	// 截断或非正常结束的文本不能作为完整摘要保存，留给任务恢复时重试。
+	// DeepSeek ignores budget_tokens, so a max_tokens stop usually means
+	// thinking consumed the whole output allowance and no answer was produced.
+	if response.StopReason == anthropic.StopReasonMaxTokens {
+		return "", fmt.Errorf("模型输出被 max_tokens=%d 截断（stop_reason=%q, output_tokens=%d）。思考模式仍开启，budget_tokens=%d 会被 DeepSeek 忽略，思考占用的是这段输出额度", maxTokens, response.StopReason, response.Usage.OutputTokens, budgetTokens)
+	}
 	if response.StopReason != anthropic.StopReasonEndTurn {
-		return "", fmt.Errorf("summary did not complete: stop_reason=%q, output_tokens=%d", response.StopReason, response.Usage.OutputTokens)
+		return "", fmt.Errorf("模型输出未完成: stop_reason=%q, output_tokens=%d, max_tokens=%d", response.StopReason, response.Usage.OutputTokens, maxTokens)
 	}
 
 	var text strings.Builder

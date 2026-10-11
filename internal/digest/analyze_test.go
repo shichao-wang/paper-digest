@@ -118,16 +118,28 @@ func TestRequestClaudeRoutesToConfiguredGateway(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Model != "group/deepseek-v4-1-flash" {
 			t.Error("模型请求未使用指定模型")
 		}
-		if body.MaxTokens != maxOutputTokens || body.Thinking.Type != "enabled" || body.Thinking.BudgetTokens != thinkingBudget {
+		if body.MaxTokens != 16384 || body.Thinking.Type != "enabled" || body.Thinking.BudgetTokens != ThinkingBudget {
 			t.Errorf("thinking request = %+v", body)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":"msg_test","type":"message","role":"assistant","model":"group/deepseek-v4-1-flash","content":[{"type":"text","text":"测试摘要"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
 	}))
 	defer server.Close()
-	text, err := requestClaude(context.Background(), "file-key", server.URL, "group/deepseek-v4-1-flash", "测试")
+	text, err := requestClaude(context.Background(), "file-key", server.URL, "group/deepseek-v4-1-flash", "测试", 16384, ThinkingBudget)
 	if err != nil || text != "测试摘要" || calls != 1 {
 		t.Fatalf("网关调用失败: text=%q, err=%v, calls=%d", text, err, calls)
+	}
+}
+
+func TestRequestClaudeReportsAMaxTokensStopWithTheConfiguredLimit(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"msg_test","type":"message","role":"assistant","model":"deepseek-flash","content":[{"type":"text","text":""}],"stop_reason":"max_tokens","usage":{"input_tokens":20,"output_tokens":16384}}`))
+	}))
+	defer server.Close()
+	_, err := requestClaude(context.Background(), "file-key", server.URL, "deepseek-flash", "判断", 16384, 2048)
+	if err == nil || !strings.Contains(err.Error(), "max_tokens=16384") || !strings.Contains(err.Error(), "output_tokens=16384") || !strings.Contains(err.Error(), "budget_tokens=2048") {
+		t.Fatalf("error = %v", err)
 	}
 }
 

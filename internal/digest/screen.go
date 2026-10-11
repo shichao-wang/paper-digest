@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -15,12 +16,7 @@ import (
 	"github.com/shichao-wang/paper-digest/skills"
 )
 
-const (
-	screenBatchSize = 8
-	screenAttempts  = 3
-	screenTimeout   = 45 * time.Second
-	maxReasonRunes  = 200
-)
+const maxReasonRunes = 200
 
 // Decision is one paper's screening verdict.
 type Decision struct {
@@ -35,15 +31,18 @@ type Decision struct {
 // A failed batch is retried. After the retries are exhausted the error is
 // returned and nothing is partially accepted.
 type Screener struct {
-	Model       string
-	APIKey      string
-	BaseURL     string
-	Instruction string
-	Skill       string
-	Attempts    int
-	BatchSize   int
-	Timeout     time.Duration
-	request     func(context.Context, string, string, string, string) (string, error)
+	Model          string
+	APIKey         string
+	BaseURL        string
+	Instruction    string
+	Skill          string
+	Attempts       int
+	BatchSize      int
+	Timeout        time.Duration
+	MaxTokens      int
+	Concurrency    int
+	ThinkingBudget int
+	request        func(context.Context, string, string, string, string) (string, error)
 }
 
 // Screen judges every paper. The result covers each input id exactly once.
@@ -69,9 +68,20 @@ func (s Screener) Screen(ctx context.Context, list []papers.Paper) ([]Decision, 
 	if skillName == "" {
 		skillName = skills.Version(skills.Screening, instruction)
 	}
+	maxTokens := s.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = DefaultScreenMaxTokens
+	}
+	budget := s.ThinkingBudget
+	if budget <= 0 {
+		budget = ThinkingBudget
+	}
 	request := s.request
 	if request == nil {
-		request = requestClaude
+		limit := maxTokens
+		request = func(ctx context.Context, apiKey, baseURL, model, prompt string) (string, error) {
+			return requestClaude(ctx, apiKey, baseURL, model, prompt, limit, budget)
+		}
 	}
 	model := strings.TrimSpace(s.Model)
 	if model == "" {
@@ -79,32 +89,80 @@ func (s Screener) Screen(ctx context.Context, list []papers.Paper) ([]Decision, 
 	}
 	attempts := s.Attempts
 	if attempts <= 0 {
-		attempts = screenAttempts
+		attempts = ScreenAttempts
 	}
 	batchSize := s.BatchSize
 	if batchSize <= 0 {
-		batchSize = screenBatchSize
+		batchSize = DefaultScreenBatchSize
 	}
 	timeout := s.Timeout
 	if timeout <= 0 {
-		timeout = screenTimeout
+		timeout = DefaultScreenTimeout
+	}
+	concurrency := s.Concurrency
+	if concurrency <= 0 {
+		concurrency = DefaultScreenConcurrency
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		need := PhaseDuration(len(list), batchSize, concurrency, attempts, timeout)
+		if left := time.Until(deadline); left < need {
+			return nil, fmt.Errorf("距离截止还剩 %s，完成本次精筛大约需要 %s（%d 篇，每批 %d，并发 %d，每批最多 %d 次，单次超时 %s，max_tokens=%d）", left.Round(time.Second), need.Round(time.Second), len(list), batchSize, concurrency, attempts, timeout, maxTokens)
+		}
 	}
 
-	all := make([]Decision, 0, len(list))
+	batches := make([][]papers.Paper, 0, (len(list)+batchSize-1)/batchSize)
 	for start := 0; start < len(list); start += batchSize {
 		end := start + batchSize
 		if end > len(list) {
 			end = len(list)
 		}
-		batch := list[start:end]
-		decisions, err := screenBatch(ctx, request, s.APIKey, s.BaseURL, model, instruction, batch, attempts, timeout)
-		if err != nil {
-			return nil, err
-		}
-		for i := range decisions {
-			decisions[i].Skill = skillName
-		}
-		all = append(all, decisions...)
+		batches = append(batches, list[start:end])
+	}
+	results := make([][]Decision, len(batches))
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, concurrency)
+	var mu sync.Mutex
+	var firstErr error
+	for i, batch := range batches {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = ctx.Err()
+				}
+				mu.Unlock()
+				return
+			}
+			decisions, err := screenBatch(ctx, request, s.APIKey, s.BaseURL, model, instruction, batch, attempts, timeout)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				if firstErr == nil {
+					firstErr = err
+					cancel()
+				}
+				return
+			}
+			for n := range decisions {
+				decisions[n].Skill = skillName
+			}
+			results[i] = decisions
+		}()
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	all := make([]Decision, 0, len(list))
+	for _, part := range results {
+		all = append(all, part...)
 	}
 	if err := covers(list, all); err != nil {
 		return nil, err
@@ -117,6 +175,11 @@ func screenBatch(ctx context.Context, request func(context.Context, string, stri
 	for attempt := 1; attempt <= attempts; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
+		}
+		if deadline, ok := ctx.Deadline(); ok {
+			if left := time.Until(deadline); left < timeout {
+				return nil, fmt.Errorf("剩余 %s，不够一次精筛请求（超时 %s）", left.Round(time.Second), timeout)
+			}
 		}
 		reqCtx, cancel := context.WithTimeout(ctx, timeout)
 		text, err := request(reqCtx, apiKey, baseURL, model, screeningPrompt(instruction, batch))
