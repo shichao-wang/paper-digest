@@ -131,6 +131,57 @@ func TestEvalPreviewLabelsAndFixturesDoNotTouchDigestState(t *testing.T) {
 	}
 }
 
+func TestEvalFetchesEachAnnouncementSeparately(t *testing.T) {
+	originalFetch := fetchEvalPapers
+	t.Cleanup(func() { fetchEvalPapers = originalFetch })
+	var windows []papers.Window
+	fetchEvalPapers = func(_ context.Context, window papers.Window, _ string) ([]papers.Paper, error) {
+		windows = append(windows, window)
+		return nil, nil
+	}
+	database := filepath.Join(t.TempDir(), "digest.db")
+	text, err := captureStdout(t, func() error {
+		return run(configArgs(t, database, "", "", false, "eval", "--date", "2026-10-09", "--to", "2026-10-11"))
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(windows) != 2 {
+		t.Fatalf("windows=%d text=%s", len(windows), text)
+	}
+	for i, date := range []string{"2026-10-09", "2026-10-10"} {
+		batch, ok, err := papers.DigestBatch(date)
+		if err != nil || !ok {
+			t.Fatal(err)
+		}
+		if !windows[i].After.Equal(batch.Window.After) || !windows[i].Through.Equal(batch.Window.Through) {
+			t.Fatalf("%s window = %s..%s", date, windows[i].After, windows[i].Through)
+		}
+	}
+}
+
+func TestEvalSkillFileMustBeACompleteSkillDocument(t *testing.T) {
+	originalFetch := fetchEvalPapers
+	t.Cleanup(func() { fetchEvalPapers = originalFetch })
+	fetchEvalPapers = func(context.Context, papers.Window, string) ([]papers.Paper, error) {
+		t.Fatal("skill validation fetched arXiv")
+		return nil, nil
+	}
+	dir := t.TempDir()
+	input := filepath.Join(dir, "papers.json")
+	if err := os.WriteFile(input, []byte("[]"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	skill := filepath.Join(dir, "SKILL.md")
+	if err := os.WriteFile(skill, []byte("只保留检索论文。\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := run(configArgs(t, filepath.Join(dir, "digest.db"), "", "test-key", false, "eval", "--date", "2026-10-09", "--input", input, "--screen", "--skill", skill))
+	if err == nil || !strings.Contains(err.Error(), "前言") {
+		t.Fatalf("body-only skill file error = %v", err)
+	}
+}
+
 func TestEvalRejectsBadDatesBeforeOpeningTheDatabase(t *testing.T) {
 	database := filepath.Join(t.TempDir(), "nested", "digest.db")
 	args := configArgs(t, database, "", "", false, "eval", "--date", "2026-10-01", "--to", "2026-10-20")

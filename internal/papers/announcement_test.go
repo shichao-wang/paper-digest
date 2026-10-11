@@ -1,6 +1,7 @@
 package papers
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -116,6 +117,40 @@ func TestOctober9DigestKeepsThatSubmissionDayOnly(t *testing.T) {
 	sunday, ok, err := DigestBatch("2026-10-11")
 	if err != nil || ok || sunday.Window.Contains(later) {
 		t.Fatalf("sunday ok=%v window=%+v err=%v", ok, sunday.Window, err)
+	}
+}
+
+func TestFetchEachBatchKeepsTheDailyPageCap(t *testing.T) {
+	dates := []string{"2026-10-09", "2026-10-10", "2026-10-11"}
+	var windows []Window
+	fetched, err := FetchEachBatch(context.Background(), dates, "cat:cs.IR", func(_ context.Context, window Window, query string) ([]Paper, error) {
+		if query != "cat:cs.IR" {
+			t.Fatalf("query = %s", query)
+		}
+		windows = append(windows, window)
+		return []Paper{{ID: window.Through.Format(time.RFC3339)}}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(windows) != 2 || len(fetched) != 2 {
+		t.Fatalf("windows=%d papers=%d", len(windows), len(fetched))
+	}
+	for i, date := range []string{"2026-10-09", "2026-10-10"} {
+		batch, ok, err := DigestBatch(date)
+		if err != nil || !ok {
+			t.Fatalf("%s ok=%v err=%v", date, ok, err)
+		}
+		if !windows[i].After.Equal(batch.Window.After) || !windows[i].Through.Equal(batch.Window.Through) {
+			t.Fatalf("%s window = %s..%s, want %s..%s", date, windows[i].After, windows[i].Through, batch.Window.After, batch.Window.Through)
+		}
+	}
+	merged, ok, err := Cover(dates)
+	if err != nil || !ok {
+		t.Fatal(err)
+	}
+	if windows[0].After.Equal(merged.After) && windows[0].Through.Equal(merged.Through) {
+		t.Fatal("first fetch used the merged multi-day window")
 	}
 }
 

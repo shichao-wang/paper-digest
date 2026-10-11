@@ -216,7 +216,7 @@ func buildDay(date string, cutoff time.Time, batch papers.Batch, hasBatch bool, 
 	var draftPushed []papers.Paper
 	if draft != nil {
 		drafted = papers.Select(fetched, window, *draft, nil)
-		draftPushed = papers.ForPush(drafted, draft.MaxPapers())
+		draftPushed = screenedPush(drafted, note, draft.MaxPapers())
 	}
 	selectedAt := positions(selected)
 	pushedAt := positions(pushed)
@@ -303,7 +303,7 @@ func buildDay(date string, cutoff time.Time, batch papers.Batch, hasBatch bool, 
 	day.OnlyCurrent = idsIn(day.Selected, func(item Candidate) bool { return !item.LooseSelected })
 	day.OnlyLoose = idsIn(day.Loose, func(item Candidate) bool { return !item.Selected })
 	for _, paper := range sent {
-		if _, pushed := pushedAt[paper.ID]; !pushed {
+		if _, selected := selectedAt[paper.ID]; !selected {
 			day.OnlySent = append(day.OnlySent, paper.ID)
 		}
 	}
@@ -320,20 +320,31 @@ func buildDay(date string, cutoff time.Time, batch papers.Batch, hasBatch bool, 
 	return day
 }
 
-func applyScreen(byID map[string]Candidate, selected []papers.Paper, note DayNote, limit int) {
+// screenedPush ranks a coarse collection with the day's screening decisions
+// before applying its push limit. Without decisions it keeps the coarse prefix.
+func screenedPush(collected []papers.Paper, note DayNote, limit int) []papers.Paper {
 	if len(note.Decisions) == 0 {
-		return
+		return papers.ForPush(collected, limit)
 	}
 	scores := map[string]float64{}
-	byDecision := map[string]ScreenNote{}
 	for _, decision := range note.Decisions {
-		byDecision[decision.ID] = decision
 		if decision.Relevant {
 			scores[decision.ID] = decision.Score
 		}
 	}
+	return papers.ForPush(papers.RankRelevant(collected, scores), limit)
+}
+
+func applyScreen(byID map[string]Candidate, selected []papers.Paper, note DayNote, limit int) {
+	if len(note.Decisions) == 0 {
+		return
+	}
+	byDecision := map[string]ScreenNote{}
+	for _, decision := range note.Decisions {
+		byDecision[decision.ID] = decision
+	}
 	finalAt := map[string]int{}
-	for i, paper := range papers.ForPush(papers.RankRelevant(selected, scores), limit) {
+	for i, paper := range screenedPush(selected, note, limit) {
 		finalAt[paper.ID] = i + 1
 	}
 	for id, item := range byID {

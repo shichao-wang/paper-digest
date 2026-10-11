@@ -84,19 +84,13 @@ func runEvalPreview(ctx context.Context, cfg config.Config, args []string) error
 			return err
 		}
 	} else {
-		window, ok, err := papers.Cover(dates)
+		query := active.Query
+		if draft != nil {
+			query = papers.OrQuery(active.Query, draft.Query)
+		}
+		fetched, err = papers.FetchEachBatch(ctx, dates, query, fetchEvalPapers)
 		if err != nil {
 			return err
-		}
-		if ok {
-			query := active.Query
-			if draft != nil {
-				query = papers.OrQuery(active.Query, draft.Query)
-			}
-			fetched, err = fetchEvalPapers(ctx, window, query)
-			if err != nil {
-				return err
-			}
 		}
 	}
 	store, err := openEvalStore(cfg)

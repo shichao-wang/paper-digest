@@ -31,8 +31,8 @@ type Options struct {
 	// When both maps are empty, the joint topic gets the built-in rules.
 	Rules      map[string]papers.Rules
 	Selections map[string]papers.Selection
-	// Fetch loads arXiv candidates for one or more digest dates. The window is
-	// the union of their submission intervals, and the string is the arXiv
+	// Fetch loads arXiv candidates for one announcement window. Eval calls it
+	// once per digest date that has a new batch. The string is the arXiv
 	// search query. A nil Fetch uses the public arXiv API.
 	Fetch func(context.Context, papers.Window, string) ([]papers.Paper, error)
 	// ScreeningSkills are the live screening instructions per topic.

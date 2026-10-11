@@ -12,10 +12,12 @@ import (
 	"time"
 
 	"github.com/shichao-wang/paper-digest/internal/config"
+	"github.com/shichao-wang/paper-digest/internal/digest"
 	"github.com/shichao-wang/paper-digest/internal/eval"
 	"github.com/shichao-wang/paper-digest/internal/job"
 	"github.com/shichao-wang/paper-digest/internal/papers"
 	"github.com/shichao-wang/paper-digest/internal/state"
+	"github.com/shichao-wang/paper-digest/skills"
 )
 
 func TestEvalPreviewAndLabelsDoNotMutateTheDigest(t *testing.T) {
@@ -217,6 +219,79 @@ func TestEvalDraftDoesNotChangeLiveRulesOrDigest(t *testing.T) {
 	seen, err := store.Seen(ctx, job.Topic, strong.ID)
 	if err != nil || seen {
 		t.Fatalf("draft marked seen: %v %v", seen, err)
+	}
+}
+
+func TestEvalFetchesEachAnnouncementDay(t *testing.T) {
+	store, err := state.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	var windows []papers.Window
+	handler, err := New(store, fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("fixture")}}, Options{
+		Topics: []config.Topic{{ID: job.Topic}},
+		Fetch: func(_ context.Context, window papers.Window, _ string) ([]papers.Paper, error) {
+			windows = append(windows, window)
+			return nil, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview := request(handler, http.MethodGet, "/api/eval?date=2026-10-09&to=2026-10-11", "")
+	if preview.Code != http.StatusOK || len(windows) != 2 {
+		t.Fatalf("preview=%d windows=%d body=%s", preview.Code, len(windows), preview.Body.String())
+	}
+	for i, date := range []string{"2026-10-09", "2026-10-10"} {
+		batch, ok, err := papers.DigestBatch(date)
+		if err != nil || !ok {
+			t.Fatal(err)
+		}
+		if !windows[i].After.Equal(batch.Window.After) || !windows[i].Through.Equal(batch.Window.Through) {
+			t.Fatalf("%s window = %s..%s", date, windows[i].After, windows[i].Through)
+		}
+	}
+}
+
+func TestEvalAcceptsBodyOnlyScreeningSkill(t *testing.T) {
+	store, err := state.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	batch, ok, err := papers.DigestBatch("2026-10-09")
+	if err != nil || !ok {
+		t.Fatalf("batch ok=%v err=%v", ok, err)
+	}
+	strong := papers.Paper{ID: "arxiv:strong", Title: "Sequential Recommendation", Published: batch.Window.Through.Add(-time.Hour), Categories: []string{"cs.IR"}}
+	calls := 0
+	var got string
+	handler, err := New(store, fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("fixture")}}, Options{
+		Topics: []config.Topic{{ID: job.Topic}},
+		Fetch: func(_ context.Context, _ papers.Window, _ string) ([]papers.Paper, error) {
+			return []papers.Paper{strong}, nil
+		},
+		ScreeningSkills: map[string]skills.Skill{
+			job.Topic: {Name: skills.Screening, Description: "现行精筛", Body: "旧正文"},
+		},
+		Screen: func(_ context.Context, instruction string, _ []papers.Paper) ([]digest.Decision, error) {
+			calls++
+			got = instruction
+			return []digest.Decision{{ID: strong.ID, Relevant: true, Score: 0.8, Reason: "相关"}}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := "只保留检索论文。"
+	okScreen := postEval(handler, "127.0.0.1:8081", "http://127.0.0.1:8081", `{"date":"2026-10-09","screen":true,"screeningSkill":"`+body+`"}`)
+	if okScreen.Code != http.StatusOK || calls != 1 || got != body || !strings.Contains(okScreen.Body.String(), skills.Version(skills.Screening, body)) {
+		t.Fatalf("body-only = %d calls=%d instruction=%q body=%s", okScreen.Code, calls, got, okScreen.Body.String())
+	}
+	broken := postEval(handler, "127.0.0.1:8081", "http://127.0.0.1:8081", `{"date":"2026-10-09","screen":true,"screeningSkill":"---\nname: broken"}`)
+	if broken.Code != http.StatusBadRequest || calls != 1 {
+		t.Fatalf("broken skill = %d calls=%d body=%s", broken.Code, calls, broken.Body.String())
 	}
 }
 

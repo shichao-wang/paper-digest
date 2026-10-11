@@ -1,6 +1,7 @@
 package papers
 
 import (
+	"context"
 	"fmt"
 	"time"
 )
@@ -101,8 +102,48 @@ func DigestBatch(shanghaiDate string) (Batch, bool, error) {
 	return announcementBatch(current), true, nil
 }
 
+// AnnouncementBatches returns one batch per digest date that has a new
+// announcement, in date order. Days without a batch are omitted.
+func AnnouncementBatches(dates []string) ([]Batch, error) {
+	batches := make([]Batch, 0, len(dates))
+	for _, date := range dates {
+		batch, ok, err := DigestBatch(date)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		batches = append(batches, batch)
+	}
+	return batches, nil
+}
+
+// FetchEachBatch loads one announcement window at a time. The arXiv page cap
+// is sized for a single announcement, so a multi-day preview must not merge
+// those windows into one query.
+func FetchEachBatch(ctx context.Context, dates []string, query string, fetch func(context.Context, Window, string) ([]Paper, error)) ([]Paper, error) {
+	if fetch == nil {
+		return nil, fmt.Errorf("arxiv fetch is not configured")
+	}
+	batches, err := AnnouncementBatches(dates)
+	if err != nil {
+		return nil, err
+	}
+	var fetched []Paper
+	for _, batch := range batches {
+		page, err := fetch(ctx, batch.Window, query)
+		if err != nil {
+			return nil, err
+		}
+		fetched = append(fetched, page...)
+	}
+	return fetched, nil
+}
+
 // Cover is the submission span of every digest date that has a new batch.
-// ok is false when none of the dates has one, so the caller should not query arXiv.
+// ok is false when none of the dates has one. Do not pass this span to
+// FetchWindow for more than one announcement; use FetchEachBatch instead.
 func Cover(dates []string) (Window, bool, error) {
 	var merged Window
 	any := false

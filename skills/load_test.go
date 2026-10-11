@@ -75,6 +75,32 @@ func TestDirectoryOverrideReplacesOneSkillAndRejectsInvalidFiles(t *testing.T) {
 	}
 }
 
+func TestInstructionKeepsActiveMetadataForBodyOnlyText(t *testing.T) {
+	fallback := Skill{Name: Screening, Description: "现行精筛", Body: "旧正文"}
+	body := "只保留检索论文。"
+	skill, err := Instruction(body, fallback)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if skill.Name != fallback.Name || skill.Description != fallback.Description || skill.Body != body {
+		t.Fatalf("body-only = %+v", skill)
+	}
+	if skill.Version() != Version(Screening, body) {
+		t.Fatalf("version = %s", skill.Version())
+	}
+	full := "---\nname: draft-screen\ndescription: 草稿精筛\n---\n完整判断。\n"
+	parsed, err := Instruction(full, fallback)
+	if err != nil || parsed.Name != "draft-screen" || parsed.Body != "完整判断。" || parsed.Description != "草稿精筛" {
+		t.Fatalf("full document = %+v, %v", parsed, err)
+	}
+	if _, err := Instruction("---\nname: broken", fallback); err == nil {
+		t.Fatal("incomplete front matter was accepted as a body")
+	}
+	if _, err := Instruction("   ", fallback); err == nil {
+		t.Fatal("empty instruction was accepted")
+	}
+}
+
 func TestParseRejectsIncompleteSkills(t *testing.T) {
 	for _, text := range []string{
 		"",

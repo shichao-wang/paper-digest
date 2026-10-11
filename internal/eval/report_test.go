@@ -143,6 +143,95 @@ func TestCollectedPapersStayVisibleAboveThePushCap(t *testing.T) {
 	}
 }
 
+func TestDraftPushFollowsScreeningScores(t *testing.T) {
+	batch, ok, err := papers.DigestBatch("2026-10-09")
+	if err != nil || !ok {
+		t.Fatalf("batch ok=%v err=%v", ok, err)
+	}
+	spec := papers.DefaultSelection()
+	spec.MaxPapers = 1
+	rules, err := papers.Compile(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newer := papers.Paper{ID: "arxiv:newer", Title: "Web Search Ranking", Published: batch.Window.Through.Add(-time.Hour), URL: "https://arxiv.org/abs/newer"}
+	older := papers.Paper{ID: "arxiv:older", Title: "Web Search Ranking", Published: batch.Window.Through.Add(-2 * time.Hour), URL: "https://arxiv.org/abs/older"}
+	fetched := []papers.Paper{newer, older}
+	notes := map[string]DayNote{
+		"2026-10-09": {
+			Source: "model",
+			Decisions: []ScreenNote{
+				{ID: newer.ID, Relevant: true, Score: 0.2, Reason: "弱相关"},
+				{ID: older.ID, Relevant: true, Score: 0.9, Reason: "强相关"},
+			},
+		},
+	}
+	labels := map[string]string{older.ID: LabelRelevant, newer.ID: LabelNotRelevant}
+	report, err := Build("recommendation-advertising-search", []string{"2026-10-09"}, rules, &rules, fetched, nil, labels, notes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	day := report.Days[0]
+	if day.Draft == nil || len(day.Draft.Pushed) != 1 || day.Draft.Pushed[0].ID != older.ID || !day.Draft.Pushed[0].DraftPushed {
+		t.Fatalf("draft pushed = %+v", day.Draft)
+	}
+	if day.Draft.Score.Precision == nil || *day.Draft.Score.Precision != 1 || day.Draft.Score.Selected != 1 {
+		t.Fatalf("draft score = %+v", day.Draft.Score)
+	}
+	if len(day.Final) != 1 || day.Final[0].ID != older.ID {
+		t.Fatalf("final = %+v", day.Final)
+	}
+	coarse, err := Build("recommendation-advertising-search", []string{"2026-10-09"}, rules, &rules, fetched, nil, labels, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if coarse.Days[0].Draft == nil || len(coarse.Days[0].Draft.Pushed) != 1 || coarse.Days[0].Draft.Pushed[0].ID != newer.ID {
+		t.Fatalf("coarse draft push = %+v", coarse.Days[0].Draft)
+	}
+	if coarse.Days[0].Draft.Score.Precision == nil || *coarse.Days[0].Draft.Score.Precision != 0 {
+		t.Fatalf("coarse draft score = %+v", coarse.Days[0].Draft.Score)
+	}
+}
+
+func TestOnlySentUsesTheFullCoarseSelection(t *testing.T) {
+	batch, ok, err := papers.DigestBatch("2026-10-09")
+	if err != nil || !ok {
+		t.Fatalf("batch ok=%v err=%v", ok, err)
+	}
+	spec := papers.DefaultSelection()
+	spec.MaxPapers = 2
+	rules, err := papers.Compile(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fetched := make([]papers.Paper, 4)
+	for i := range fetched {
+		fetched[i] = papers.Paper{
+			ID:        "arxiv:p" + string(rune('0'+i)),
+			Title:     "Web Search Ranking",
+			Published: batch.Window.Through.Add(-time.Duration(i+1) * time.Hour),
+			URL:       "https://arxiv.org/abs/example",
+		}
+	}
+	sent := map[string][]SentPaper{
+		"2026-10-09": {
+			{ID: fetched[2].ID, Title: fetched[2].Title},
+			{ID: "arxiv:missing", Title: "saved but not selected"},
+		},
+	}
+	report, err := Build("recommendation-advertising-search", []string{"2026-10-09"}, rules, nil, fetched, sent, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	day := report.Days[0]
+	if len(day.Selected) != 4 || day.Selected[2].Pushed || !day.Selected[2].Selected {
+		t.Fatalf("selected = %+v", day.Selected)
+	}
+	if !equalIDs(day.OnlySent, []string{"arxiv:missing"}) {
+		t.Fatalf("only sent = %v", day.OnlySent)
+	}
+}
+
 func TestFixturesSkipLabelsWithoutPaperText(t *testing.T) {
 	published := time.Date(2026, 10, 7, 17, 38, 35, 0, time.UTC)
 	paper := papers.Paper{ID: "arxiv:strong", Title: "Sequential Recommendation", Abstract: "session logs", Published: published, Categories: []string{"cs.IR"}}

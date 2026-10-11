@@ -128,6 +128,33 @@ func loadEmbedded() (map[string]Skill, error) {
 	return out, nil
 }
 
+// Instruction accepts either a complete SKILL.md or the body-only text the
+// editor keeps in its textarea. Body-only text keeps fallback's name and
+// description, so the version still identifies the active skill. Text that
+// starts with a front-matter marker is parsed as a full document; an
+// incomplete marker is rejected and is not repaired into a body.
+func Instruction(text string, fallback Skill) (Skill, error) {
+	text = strings.ReplaceAll(strings.TrimSpace(text), "\r\n", "\n")
+	if text == "" {
+		return Skill{}, errors.New("技能正文不能为空")
+	}
+	if strings.HasPrefix(text, "---\n") {
+		return Parse(text)
+	}
+	name := strings.TrimSpace(fallback.Name)
+	if name == "" {
+		name = Screening
+	}
+	description := strings.TrimSpace(fallback.Description)
+	if description == "" {
+		description = "筛选说明"
+	}
+	if !namePattern.MatchString(name) {
+		return Skill{}, errors.New("技能 name 只能使用小写字母、数字和连字符")
+	}
+	return Skill{Name: name, Description: description, Body: text}, nil
+}
+
 // Parse validates SKILL.md text. The name comes from the front matter.
 func Parse(text string) (Skill, error) {
 	text = strings.ReplaceAll(text, "\r\n", "\n")

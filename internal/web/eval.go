@@ -123,11 +123,6 @@ func (s *server) evalPreview(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
 	defer cancel()
-	window, hasWindow, err := papers.Cover(dates)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid query parameters")
-		return
-	}
 	fetch := s.fetch
 	if fetch == nil {
 		fetch = defaultEvalFetch
@@ -136,13 +131,10 @@ func (s *server) evalPreview(w http.ResponseWriter, r *http.Request) {
 	if draft != nil {
 		query = papers.OrQuery(active.Query, draft.Query)
 	}
-	var fetched []papers.Paper
-	if hasWindow {
-		fetched, err = fetch(ctx, window, query)
-		if err != nil {
-			writeError(w, http.StatusServiceUnavailable, "service unavailable")
-			return
-		}
+	fetched, err := papers.FetchEachBatch(ctx, dates, query, fetch)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "service unavailable")
+		return
 	}
 	labels, sent, notes, err := s.evalContext(ctx, topic.ID, dates)
 	if err != nil {
@@ -187,7 +179,7 @@ func decodeDraft(w http.ResponseWriter, r *http.Request) (string, string, papers
 	}
 	skillText := strings.TrimSpace(body.ScreeningSkill)
 	if skillText != "" {
-		if _, err := skills.Parse(skillText); err != nil {
+		if _, err := skills.Instruction(skillText, skills.Skill{}); err != nil {
 			return "", "", papers.Rules{}, false, "", false, err
 		}
 	}
@@ -350,7 +342,11 @@ func (s *server) screenEval(ctx context.Context, topic string, dates []string, a
 	instruction := ""
 	version := ""
 	if skillText != "" {
-		skill, err := skills.Parse(skillText)
+		fallback := skills.Skill{}
+		if skill, ok := s.screeningSkills[topic]; ok {
+			fallback = skill
+		}
+		skill, err := skills.Instruction(skillText, fallback)
 		if err != nil {
 			return nil, err
 		}
