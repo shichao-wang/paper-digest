@@ -1,7 +1,7 @@
 {
   "database": {"path": "data/local/digest.db"},
   "delivery": {"enabled": false},
-  "anthropic": {"api_key": "", "model": "deepseek-flash", "base_url": "https://api.deepseek.com/anthropic"},
+  "anthropic": {"api_key": "", "model": "deepseek-flash", "base_url": "https://api.deepseek.com/anthropic", "screening": {"max_tokens": 16384, "timeout_seconds": 180, "batch_size": 8, "concurrency": 2}, "summary": {"max_tokens": 8192, "timeout_seconds": 120, "concurrency": 2}},
   "skills": {"dir": "skills"},
   "topics": [
     {"id": "recommendation-advertising-search", "skills": {"screening": "paper-screening", "summary": "paper-summary"}}

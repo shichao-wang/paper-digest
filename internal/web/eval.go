@@ -121,7 +121,13 @@ func (s *server) evalPreview(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid query parameters")
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
+	budget := 3 * time.Minute
+	if screen {
+		// Screening calls can think for a few minutes each. One announcement
+		// is several batches; 20 minutes covers that plus the arXiv fetch.
+		budget = 20 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), budget)
 	defer cancel()
 	fetch := s.fetch
 	if fetch == nil {

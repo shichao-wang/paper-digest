@@ -213,6 +213,8 @@ func defaultWorker(cfg config.Config, store *state.Store) (worker, error) {
 	if err != nil {
 		return nil, err
 	}
+	screeningCall := cfg.ScreeningCall()
+	summaryCall := cfg.SummaryCall()
 	return &job.Runner{
 		Store: store,
 		Fetch: func(ctx context.Context, batch papers.Batch) ([]papers.Paper, error) {
@@ -223,13 +225,21 @@ func defaultWorker(cfg config.Config, store *state.Store) (worker, error) {
 		Analyzer: digest.ClaudeAnalyzer{
 			Model: model, APIKey: cfg.Anthropic.APIKey, BaseURL: cfg.Anthropic.BaseURL,
 			Instruction: summarySkill.Body, Version: summarySkill.Version(),
+			MaxTokens: summaryCall.MaxTokens, Timeout: summaryCall.Timeout,
 		},
 		Screen: digest.Screener{
 			Model: model, APIKey: cfg.Anthropic.APIKey, BaseURL: cfg.Anthropic.BaseURL,
 			Instruction: screeningSkill.Body, Skill: screeningSkill.Version(),
+			MaxTokens: screeningCall.MaxTokens, Timeout: screeningCall.Timeout,
+			BatchSize: screeningCall.BatchSize, Concurrency: screeningCall.Concurrency,
 		},
 		Sender: delivery.StoredFeishu{Store: store, Topic: job.Topic}, Now: time.Now,
-		Rules: rules,
+		Rules:              rules,
+		ScreenTimeout:      screeningCall.Timeout,
+		ScreenBatch:        screeningCall.BatchSize,
+		ScreenConcurrency:  screeningCall.Concurrency,
+		SummaryTimeout:     summaryCall.Timeout,
+		SummaryConcurrency: summaryCall.Concurrency,
 	}, nil
 }
 
@@ -316,9 +326,12 @@ func serve(parent context.Context, cfg config.Config, options serveOptions, deps
 		Selections:      selectionSpecs(cfg),
 		ScreeningSkills: screeningSkills,
 		Screen: func(ctx context.Context, instruction string, list []papers.Paper) ([]digest.Decision, error) {
+			call := cfg.ScreeningCall()
 			return (digest.Screener{
 				Model: model, APIKey: cfg.Anthropic.APIKey, BaseURL: cfg.Anthropic.BaseURL,
 				Instruction: instruction,
+				MaxTokens:   call.MaxTokens, Timeout: call.Timeout,
+				BatchSize: call.BatchSize, Concurrency: call.Concurrency,
 			}).Screen(ctx, list)
 		},
 		Fetch: func(ctx context.Context, window papers.Window, searchQuery string) ([]papers.Paper, error) {

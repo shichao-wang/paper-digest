@@ -76,6 +76,80 @@ func jobStatus(t *testing.T, r *Runner, date string) string {
 	return current.Status
 }
 
+func TestGenerateRefusesARunThatCannotFinishBeforeTheDeadline(t *testing.T) {
+	r := testRunner(t)
+	date := BeijingDate(r.Now())
+	batch, ok, err := papers.DigestBatch(date)
+	if err != nil || !ok {
+		t.Fatal(err)
+	}
+	r.Fetch = func(context.Context, papers.Batch) ([]papers.Paper, error) {
+		list := make([]papers.Paper, 30)
+		for i := range list {
+			list[i] = papers.Paper{
+				ID: "arxiv:p" + string(rune('a'+i)), Title: "Web Search Ranking",
+				Published: batch.Window.Through.Add(-time.Duration(i+1) * time.Minute),
+				URL:       "https://arxiv.org/abs/example",
+			}
+		}
+		return list, nil
+	}
+	r.Screen = screenFunc(func(context.Context, []papers.Paper) ([]digest.Decision, error) {
+		t.Fatal("screening started without enough time")
+		return nil, nil
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	err = r.Generate(ctx, date)
+	if !errors.Is(err, errScreeningClosed) {
+		t.Fatalf("Generate() = %v", err)
+	}
+	current, err := r.Store.GetJob(context.Background(), Topic, date)
+	if err != nil || current.Status != "missed" || !strings.Contains(current.Message, "距离截止") || !strings.Contains(current.Message, "精筛失败，当天不发送") {
+		t.Fatalf("job = %+v, %v", current, err)
+	}
+}
+
+func TestSummariesOverlapWhenConcurrencyAllows(t *testing.T) {
+	r := testRunner(t)
+	date := BeijingDate(r.Now())
+	batch, ok, err := papers.DigestBatch(date)
+	if err != nil || !ok {
+		t.Fatal(err)
+	}
+	r.SummaryConcurrency = 2
+	r.Fetch = func(context.Context, papers.Batch) ([]papers.Paper, error) {
+		return []papers.Paper{
+			{ID: "arxiv:one", Title: "Web Search Ranking", Published: batch.Window.Through.Add(-time.Hour), URL: "https://arxiv.org/abs/one"},
+			{ID: "arxiv:two", Title: "Web Search Ranking", Published: batch.Window.Through.Add(-2 * time.Hour), URL: "https://arxiv.org/abs/two"},
+		}, nil
+	}
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	r.Analyzer = analyzerFunc(func(ctx context.Context, paper papers.Paper) (digest.Summary, error) {
+		started <- struct{}{}
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return digest.Summary{}, ctx.Err()
+		}
+		return digest.Summary{Text: "基于摘要的中文要点", Model: "fixture", PromptVersion: "test"}, nil
+	})
+	done := make(chan error, 1)
+	go func() { done <- r.Generate(context.Background(), date) }()
+	for i := 0; i < 2; i++ {
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			t.Fatal("summaries did not overlap")
+		}
+	}
+	close(release)
+	if err := <-done; err != nil || jobStatus(t, r, date) != "ready" {
+		t.Fatalf("Generate() = %v, status %s", err, jobStatus(t, r, date))
+	}
+}
+
 func TestGenerateSummarizesOnlyThePushSet(t *testing.T) {
 	r := testRunner(t)
 	spec := papers.DefaultSelection()

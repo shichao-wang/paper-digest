@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/shichao-wang/paper-digest/internal/digest"
 	"github.com/shichao-wang/paper-digest/internal/papers"
 )
 
@@ -34,6 +35,30 @@ func TestModelGatewayConfig(t *testing.T) {
 		if err == nil || strings.Contains(err.Error(), "secret") {
 			t.Fatalf("应拒绝无效网关地址且不泄漏凭据: %v", err)
 		}
+	}
+}
+
+func TestModelCallDefaultsAndOverrides(t *testing.T) {
+	cfg, err := loadFixture(t, `{"topics":[{"id":"recommendation-advertising-search"}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ScreeningCall() != digest.DefaultScreeningCall() || cfg.SummaryCall() != digest.DefaultSummaryCall() {
+		t.Fatalf("defaults screen=%+v summary=%+v", cfg.ScreeningCall(), cfg.SummaryCall())
+	}
+	cfg, err = loadFixture(t, `{"anthropic":{"screening":{"max_tokens":32768,"timeout_seconds":240,"batch_size":4,"concurrency":3},"summary":{"max_tokens":12288,"timeout_seconds":150,"concurrency":2}},"topics":[{"id":"recommendation-advertising-search"}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	screen, summary := cfg.ScreeningCall(), cfg.SummaryCall()
+	if screen.MaxTokens != 32768 || screen.Timeout.Seconds() != 240 || screen.BatchSize != 4 || screen.Concurrency != 3 || summary.MaxTokens != 12288 || summary.Timeout.Seconds() != 150 {
+		t.Fatalf("overrides screen=%+v summary=%+v", screen, summary)
+	}
+	if _, err := loadFixture(t, `{"anthropic":{"screening":{"max_tokens":100}},"topics":[{"id":"recommendation-advertising-search"}]}`); err == nil || !strings.Contains(err.Error(), "max_tokens") {
+		t.Fatalf("invalid max_tokens error = %v", err)
+	}
+	if _, err := loadFixture(t, `{"anthropic":{"summary":{"batch_size":4}},"topics":[{"id":"recommendation-advertising-search"}]}`); err == nil || !strings.Contains(err.Error(), "batch_size") {
+		t.Fatalf("summary batch error = %v", err)
 	}
 }
 

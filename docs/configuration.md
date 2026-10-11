@@ -13,6 +13,13 @@
 | `anthropic.api_key` | 空字符串 | 启用 worker 时必须非空；从配置读取 |
 | `anthropic.model` | 示例为 `deepseek-flash`；配置留空时代码回退为 `deepseek-flash` | 按所用服务实际支持的模型填写。已写明的模型名会照用，不会被示例改掉 |
 | `anthropic.base_url` | 示例为 `https://api.deepseek.com/anthropic` | 兼容 Anthropic Messages API 的服务根地址，不要额外加 `/v1`。留空则使用默认 Anthropic API。自定义地址要求 HTTP/HTTPS、无 URL 凭据、查询参数或片段 |
+| `anthropic.screening.max_tokens` | `16384` | 精筛单次输出上限，含思考。省略时用此默认。允许 4096～65536 |
+| `anthropic.screening.timeout_seconds` | `180` | 精筛单次请求超时。省略时用此默认。允许 30～600 |
+| `anthropic.screening.batch_size` | `8` | 每批交给模型的论文数。省略时用此默认。允许 1～16 |
+| `anthropic.screening.concurrency` | `2` | 同时进行的精筛批次数。省略时用此默认。允许 1～4 |
+| `anthropic.summary.max_tokens` | `8192` | 单篇摘要的输出上限，含思考。省略时用此默认。允许 4096～65536 |
+| `anthropic.summary.timeout_seconds` | `120` | 单篇摘要超时。省略时用此默认。允许 30～600 |
+| `anthropic.summary.concurrency` | `2` | 同时生成的摘要数。省略时用此默认。允许 1～4。摘要没有 batch_size |
 | `skills.dir` | 示例为 `/app/skills`，可省略 | 省略时只用程序内嵌的技能。填写时该目录必须存在，其中合法的 `技能名/SKILL.md` 会覆盖同名内嵌技能；文件无效则拒绝启动 |
 | `topics[].id` | `recommendation-advertising-search` | 至少一个，唯一，以小写字母开头，后续用小写字母、数字和分隔用连字符 |
 | `topics[].webhook_url` | 新配置省略 | 仅用于旧配置迁移；新地址通过页面保存到 SQLite |
@@ -63,7 +70,9 @@ docker compose up -d --force-recreate paper-digest
 
 ## 模型网关
 
-使用兼容 Anthropic Messages API 的服务时，将 `anthropic.base_url` 填为服务根地址（不额外添加 `/v1`），并配置密钥和模型名称。示例指向 DeepSeek 的 Anthropic 兼容地址和 `deepseek-flash`。请求会开启思考，`budget_tokens` 为 2048，`max_tokens` 为 4096。宿主机直接运行 CLI 若走本地网关，可用 `http://127.0.0.1:3425`；Docker Desktop 容器应使用 `http://host.docker.internal:3425` 访问宿主机。`base_url` 留空时使用默认 Anthropic API 地址。配置后仍保持 `delivery.enabled=false`，直至完成飞书试发和投递确认。
+使用兼容 Anthropic Messages API 的服务时，将 `anthropic.base_url` 填为服务根地址（不额外添加 `/v1`），并配置密钥和模型名称。示例指向 DeepSeek 的 Anthropic 兼容地址和 `deepseek-flash`。请求会开启思考。`thinking.budget_tokens` 固定为 2048，并且必须小于 `max_tokens`；DeepSeek 的 Anthropic 兼容接口会忽略这个预算，思考占用的是 `max_tokens` 整段输出额度。因此精筛默认 `max_tokens` 为 16384、单次超时 180 秒，摘要默认 `max_tokens` 为 8192、单次超时 120 秒。这些字段都可以省略，省略即使用默认值；改完保存后重新创建容器即可，不必重新构建镜像。若响应仍是 `stop_reason=max_tokens`，错误里会写上这次使用的 `max_tokens`。宿主机直接运行 CLI 若走本地网关，可用 `http://127.0.0.1:3425`；Docker Desktop 容器应使用 `http://host.docker.internal:3425` 访问宿主机。`base_url` 留空时使用默认 Anthropic API 地址。配置后仍保持 `delivery.enabled=false`，直至完成飞书试发和投递确认。
+
+按上述默认值，约 30 篇粗筛候选是 4 个精筛批次，并发 2，大约两轮。一轮按单次超时计是 3 分钟，并额外留一次重试。随后最多 `max_papers` 篇摘要（默认 5）并发 2，大约三轮，再加一次重试余量。加上采集，通常十几分钟，计划上的上限大约半小时，落在 08:00 开始、09:00 截止的窗口里。启动精筛前会按这个计划检查剩余时间；来不及完成就记为 `missed` 且不调用模型。输出令牌按实际生成计费，`max_tokens` 只是上限。
 
 ## 旧环境变量迁移与重载
 

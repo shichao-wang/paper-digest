@@ -320,9 +320,12 @@ func screenEval(ctx context.Context, cfg config.Config, topic string, dates []st
 	if model == "" {
 		model = digest.DefaultModel
 	}
+	call := cfg.ScreeningCall()
 	screener := digest.Screener{
 		Model: model, APIKey: cfg.Anthropic.APIKey, BaseURL: cfg.Anthropic.BaseURL,
 		Instruction: skill.Body, Skill: skill.Version(),
+		MaxTokens: call.MaxTokens, Timeout: call.Timeout,
+		BatchSize: call.BatchSize, Concurrency: call.Concurrency,
 	}
 	if notes == nil {
 		notes = map[string]eval.DayNote{}

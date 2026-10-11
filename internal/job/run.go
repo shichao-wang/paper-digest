@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/shichao-wang/paper-digest/internal/delivery"
@@ -26,9 +27,14 @@ type Runner struct {
 	Screen   interface {
 		Screen(context.Context, []papers.Paper) ([]digest.Decision, error)
 	}
-	Sender delivery.Sender
-	Now    func() time.Time
-	Rules  papers.Rules
+	Sender             delivery.Sender
+	Now                func() time.Time
+	Rules              papers.Rules
+	ScreenTimeout      time.Duration
+	ScreenBatch        int
+	ScreenConcurrency  int
+	SummaryTimeout     time.Duration
+	SummaryConcurrency int
 }
 
 func BeijingDate(now time.Time) string {
@@ -91,19 +97,8 @@ func (r *Runner) Generate(ctx context.Context, date string) error {
 	if err != nil {
 		return err
 	}
-	for _, paper := range remaining {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		analyzeCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
-		summary, err := r.Analyzer.Analyze(analyzeCtx, paper)
-		cancel()
-		if err != nil {
-			return fmt.Errorf("论文 %s 摘要失败: %w", paper.ID, err)
-		}
-		if err := r.Store.SaveSummary(ctx, Topic, date, paper.ID, summary); err != nil {
-			return err
-		}
+	if err := r.summarize(ctx, date, remaining); err != nil {
+		return err
 	}
 	completed, err := r.Store.Completed(ctx, Topic, date)
 	if err != nil {
@@ -125,6 +120,9 @@ func (r *Runner) screen(ctx context.Context, date string, collected []papers.Pap
 	}
 	if r.Screen == nil {
 		return nil, nil, r.failScreening(ctx, date, errors.New("精筛未配置"))
+	}
+	if err := r.fitsDeadline(ctx, len(collected)); err != nil {
+		return nil, nil, r.failScreening(ctx, date, err)
 	}
 	decisions, err := r.Screen.Screen(ctx, collected)
 	if err != nil {
@@ -165,6 +163,101 @@ func (r *Runner) failScreening(ctx context.Context, date string, cause error) er
 		return fmt.Errorf("%s；记录错过发送也失败: %w", reason, err)
 	}
 	return fmt.Errorf("%s: %w", reason, errScreeningClosed)
+}
+
+func (r *Runner) fitsDeadline(ctx context.Context, papers int) error {
+	deadline, ok := ctx.Deadline()
+	if !ok || papers == 0 {
+		return nil
+	}
+	batch := r.ScreenBatch
+	if batch <= 0 {
+		batch = digest.DefaultScreenBatchSize
+	}
+	screenConc := r.ScreenConcurrency
+	if screenConc <= 0 {
+		screenConc = digest.DefaultScreenConcurrency
+	}
+	screenTimeout := r.ScreenTimeout
+	if screenTimeout <= 0 {
+		screenTimeout = digest.DefaultScreenTimeout
+	}
+	summaryConc := r.SummaryConcurrency
+	if summaryConc <= 0 {
+		summaryConc = digest.DefaultSummaryConcurrency
+	}
+	summaryTimeout := r.SummaryTimeout
+	if summaryTimeout <= 0 {
+		summaryTimeout = digest.DefaultSummaryTimeout
+	}
+	summaries := r.Rules.MaxPapers()
+	if summaries > papers {
+		summaries = papers
+	}
+	screenNeed := digest.PhaseDuration(papers, batch, screenConc, screenTimeout)
+	summaryNeed := digest.PhaseDuration(summaries, 1, summaryConc, summaryTimeout)
+	need := screenNeed + summaryNeed + time.Minute
+	left := time.Until(deadline)
+	if left >= need {
+		return nil
+	}
+	return fmt.Errorf("距离截止还剩 %s，按当前超时和并发完成本次精筛与摘要大约需要 %s（精筛 %s，摘要最多 %d 篇 %s）", left.Round(time.Second), need.Round(time.Second), screenNeed.Round(time.Second), summaries, summaryNeed.Round(time.Second))
+}
+
+func (r *Runner) summarize(ctx context.Context, date string, remaining []papers.Paper) error {
+	if len(remaining) == 0 {
+		return nil
+	}
+	concurrency := r.SummaryConcurrency
+	if concurrency <= 0 {
+		concurrency = digest.DefaultSummaryConcurrency
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, concurrency)
+	var mu sync.Mutex
+	var firstErr error
+	for _, paper := range remaining {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-ctx.Done():
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = ctx.Err()
+				}
+				mu.Unlock()
+				return
+			}
+			summary, err := r.Analyzer.Analyze(ctx, paper)
+			if err != nil {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = fmt.Errorf("论文 %s 摘要失败: %w", paper.ID, err)
+					cancel()
+				}
+				mu.Unlock()
+				return
+			}
+			saveCtx, saveCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			err = r.Store.SaveSummary(saveCtx, Topic, date, paper.ID, summary)
+			saveCancel()
+			if err != nil {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = err
+					cancel()
+				}
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	return firstErr
 }
 
 func screeningReason(cause error) string {

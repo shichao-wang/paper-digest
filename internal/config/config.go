@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/shichao-wang/paper-digest/internal/digest"
 	"github.com/shichao-wang/paper-digest/internal/papers"
 	"github.com/shichao-wang/paper-digest/skills"
 )
@@ -36,6 +37,15 @@ type TopicSkills struct {
 	Summary   string `json:"summary,omitempty"`
 }
 
+// ModelCall is an optional limit for screening or summaries.
+// Omitted or zero fields use the built-in defaults.
+type ModelCall struct {
+	MaxTokens      int `json:"max_tokens,omitempty"`
+	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
+	BatchSize      int `json:"batch_size,omitempty"`
+	Concurrency    int `json:"concurrency,omitempty"`
+}
+
 type Config struct {
 	Database struct {
 		Path string `json:"path"`
@@ -44,14 +54,18 @@ type Config struct {
 		Enabled bool `json:"enabled"`
 	} `json:"delivery"`
 	Anthropic struct {
-		APIKey  string `json:"api_key"`
-		Model   string `json:"model"`
-		BaseURL string `json:"base_url"`
+		APIKey    string     `json:"api_key"`
+		Model     string     `json:"model"`
+		BaseURL   string     `json:"base_url"`
+		Screening *ModelCall `json:"screening,omitempty"`
+		Summary   *ModelCall `json:"summary,omitempty"`
 	} `json:"anthropic"`
 	Skills struct {
 		Dir string `json:"dir,omitempty"`
 	} `json:"skills,omitempty"`
-	Topics []Topic `json:"topics"`
+	Topics    []Topic             `json:"topics"`
+	screening digest.CallSettings `json:"-"`
+	summary   digest.CallSettings `json:"-"`
 }
 
 func removedArxivField(err error) bool {
@@ -104,6 +118,26 @@ func Load(path string) (Config, error) {
 		cfg.Anthropic.BaseURL = baseURL
 	}
 	cfg.Skills.Dir = strings.TrimSpace(cfg.Skills.Dir)
+	if cfg.Anthropic.Summary != nil && cfg.Anthropic.Summary.BatchSize != 0 {
+		return Config{}, errors.New("anthropic.summary 不使用 batch_size，摘要每次只处理一篇")
+	}
+	var screen, summary ModelCall
+	if cfg.Anthropic.Screening != nil {
+		screen = *cfg.Anthropic.Screening
+	}
+	if cfg.Anthropic.Summary != nil {
+		summary = *cfg.Anthropic.Summary
+	}
+	screening, err := digest.NormalizeScreen(screen.MaxTokens, screen.TimeoutSeconds, screen.BatchSize, screen.Concurrency)
+	if err != nil {
+		return Config{}, err
+	}
+	summaries, err := digest.NormalizeSummary(summary.MaxTokens, summary.TimeoutSeconds, summary.Concurrency)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.screening = screening
+	cfg.summary = summaries
 	for i := range cfg.Topics {
 		topic := &cfg.Topics[i]
 		if topic.Selection == nil {
@@ -144,6 +178,23 @@ func (c Config) TopicSelection(id string) (papers.Rules, papers.Selection, bool)
 		return papers.Rules{}, papers.Selection{}, false
 	}
 	return papers.Rules{}, papers.Selection{}, false
+}
+
+// ScreeningCall returns the screening output cap, timeout, batch size, and concurrency.
+// A Config that was not loaded from JSON gets the built-in defaults.
+func (c Config) ScreeningCall() digest.CallSettings {
+	if c.screening.MaxTokens == 0 {
+		return digest.DefaultScreeningCall()
+	}
+	return c.screening
+}
+
+// SummaryCall returns the summary output cap, timeout, and concurrency.
+func (c Config) SummaryCall() digest.CallSettings {
+	if c.summary.MaxTokens == 0 {
+		return digest.DefaultSummaryCall()
+	}
+	return c.summary
 }
 
 // SkillNames returns the screening and summary skill names for a topic.
