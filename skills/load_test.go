@@ -36,20 +36,17 @@ func TestEmbeddedSkillsMatchTheirFolders(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, phrase := range []string{
-		"下面几类之一时判为相关",
-		"推荐与检索模型的核心训练技术",
 		"sampled softmax",
 		"修正两级 softmax 采样偏差的方法",
-		"这几类里，分数越高",
-		"上面「收」中列出的训练技术不属于此类",
+		"只有标题或摘要表明它用来训练或评估推荐、广告、检索",
 		`{"decisions":[{"id":"arxiv:0000.00000","relevant":false,"score":0.1,"reason":"一句中文理由"}]}`,
 	} {
 		if !strings.Contains(screening.Body, phrase) {
 			t.Fatalf("screening skill missing %q", phrase)
 		}
 	}
-	if strings.Contains(screening.Body, "三类之一") || strings.Contains(screening.Body, "softmax 采样、聚类采样") {
-		t.Fatalf("screening skill still excludes softmax sampling as generic ML: %s", screening.Body)
+	if strings.Contains(screening.Body, "softmax 采样、聚类采样") {
+		t.Fatalf("screening skill still has the old generic-ML exclusion: %s", screening.Body)
 	}
 }
 

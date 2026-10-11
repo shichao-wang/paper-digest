@@ -176,7 +176,7 @@ func TestOctoberNinthNegativesStayOutOfTheDigest(t *testing.T) {
 		out := make([]digest.Decision, len(list))
 		for i, paper := range list {
 			screened = append(screened, paper.ID)
-			out[i] = digest.Decision{ID: paper.ID, Relevant: false, Score: 0.15, Reason: "通用采样，不是检索", Skill: "paper-screening@test"}
+			out[i] = digest.Decision{ID: paper.ID, Relevant: false, Score: 0.15, Reason: "测试用：全部拒绝", Skill: "paper-screening@test"}
 		}
 		return out, nil
 	})
