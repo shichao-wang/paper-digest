@@ -372,70 +372,18 @@ func TestOversizedLaterCardRejectsWholeBatchBeforeClaim(t *testing.T) {
 	}
 }
 
-func TestCatchUpCollectsEachMissingArxivDayOnce(t *testing.T) {
+func TestSundayDigestDoesNotReuseThePreviousAnnouncement(t *testing.T) {
 	r := testRunner(t)
-	ctx := context.Background()
-	if _, err := r.Store.ClaimDay(ctx, Topic, "2026-09-23"); err != nil {
-		t.Fatal(err)
-	}
-	dates, err := r.datesToGenerate(ctx, "2026-09-26")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Join(dates, ",") != "2026-09-24,2026-09-25,2026-09-26" {
-		t.Fatalf("dates = %v", dates)
-	}
-	var announcements []string
-	r.Fetch = func(_ context.Context, batch papers.Batch) ([]papers.Paper, error) {
-		announcements = append(announcements, batch.Announcement)
-		return []papers.Paper{{
-			ID: "arxiv:" + batch.Announcement, Title: "Web Search Ranking",
-			Published: batch.Window.Through.Add(-time.Hour),
-		}}, nil
-	}
-	for _, date := range dates {
-		if err := r.Generate(ctx, date); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if strings.Join(announcements, ",") != "2026-09-22,2026-09-23,2026-09-24" {
-		t.Fatalf("announcements = %v", announcements)
-	}
-	announcements = nil
-	if err := r.Generate(ctx, "2026-09-26"); err != nil {
-		t.Fatal(err)
-	}
-	if len(announcements) != 0 {
-		t.Fatalf("second generate fetched again: %v", announcements)
-	}
-	sundayFetches := 0
+	fetches := 0
 	r.Fetch = func(context.Context, papers.Batch) ([]papers.Paper, error) {
-		sundayFetches++
+		fetches++
 		return []papers.Paper{{ID: "arxiv:saturday", Title: "Web Search Ranking", Published: time.Date(2026, 9, 24, 16, 0, 0, 0, time.UTC)}}, nil
 	}
-	if err := r.Generate(ctx, "2026-09-27"); err != nil {
+	if err := r.Generate(context.Background(), "2026-09-27"); err != nil {
 		t.Fatal(err)
 	}
-	if sundayFetches != 0 || jobStatus(t, r, "2026-09-27") != "ready" {
-		t.Fatalf("sunday fetches=%d status=%s", sundayFetches, jobStatus(t, r, "2026-09-27"))
-	}
-	current, err := r.Store.GetJob(ctx, Topic, "2026-09-27")
-	if err != nil || !strings.Contains(current.Message, "未发现") {
-		t.Fatalf("sunday message = %+v %v", current, err)
-	}
-}
-
-func TestCoverDatesStopsAtSevenDaysAndSkipsExistingJobs(t *testing.T) {
-	first, err := coverDates("2026-10-10", "", false)
-	if err != nil || len(first) != 1 || first[0] != "2026-10-10" {
-		t.Fatalf("first run = %v %v", first, err)
-	}
-	gap, err := coverDates("2026-10-10", "2026-09-01", true)
-	if err != nil || len(gap) != catchUpLimit || gap[0] != "2026-10-04" || gap[len(gap)-1] != "2026-10-10" {
-		t.Fatalf("capped gap = %v %v", gap, err)
-	}
-	next, err := coverDates("2026-10-10", "2026-10-10", true)
-	if err != nil || len(next) != 1 || next[0] != "2026-10-10" {
-		t.Fatalf("already current = %v %v", next, err)
+	current, err := r.Store.GetJob(context.Background(), Topic, "2026-09-27")
+	if err != nil || fetches != 0 || current.Status != "ready" || !strings.Contains(current.Message, "未发现") {
+		t.Fatalf("sunday fetches=%d job=%+v err=%v", fetches, current, err)
 	}
 }

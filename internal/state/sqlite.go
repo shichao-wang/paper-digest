@@ -395,18 +395,6 @@ ON CONFLICT(topic, date) DO NOTHING`, topic, date, statusNew); err != nil {
 	return s.GetJob(ctx, topic, date)
 }
 
-func (s *Store) LatestJobDate(ctx context.Context, topic string) (string, bool, error) {
-	var date string
-	err := s.db.QueryRowContext(ctx, `SELECT date FROM jobs WHERE topic = ? ORDER BY date DESC LIMIT 1`, topic).Scan(&date)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", false, nil
-	}
-	if err != nil {
-		return "", false, fmt.Errorf("latest job date: %w", err)
-	}
-	return date, true, nil
-}
-
 func (s *Store) GetJob(ctx context.Context, topic, date string) (Job, error) {
 	var job Job
 	err := s.db.QueryRowContext(ctx, `
