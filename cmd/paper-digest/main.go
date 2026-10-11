@@ -14,7 +14,6 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -189,10 +188,6 @@ type serveDependencies struct {
 }
 
 func defaultWorker(cfg config.Config, store *state.Store) (worker, error) {
-	model := strings.TrimSpace(cfg.Anthropic.Model)
-	if model == "" {
-		model = digest.DefaultModel
-	}
 	rules, _, ok := cfg.TopicSelection(job.Topic)
 	if !ok {
 		return nil, errors.New("主题 recommendation-advertising-search 没有筛选规则")
@@ -223,15 +218,16 @@ func defaultWorker(cfg config.Config, store *state.Store) (worker, error) {
 			return papers.FetchWindow(fetchCtx, &http.Client{Timeout: 45 * time.Second}, "", batch.Window, rules.Query)
 		},
 		Analyzer: digest.ClaudeAnalyzer{
-			Model: model, APIKey: cfg.Anthropic.APIKey, BaseURL: cfg.Anthropic.BaseURL,
+			Model: summaryCall.Model, APIKey: cfg.Anthropic.APIKey, BaseURL: cfg.Anthropic.BaseURL,
 			Instruction: summarySkill.Body, Version: summarySkill.Version(),
-			MaxTokens: summaryCall.MaxTokens, Timeout: summaryCall.Timeout,
+			MaxTokens: summaryCall.MaxTokens, Timeout: summaryCall.Timeout, ThinkingBudget: summaryCall.ThinkingBudget,
 		},
 		Screen: digest.Screener{
-			Model: model, APIKey: cfg.Anthropic.APIKey, BaseURL: cfg.Anthropic.BaseURL,
+			Model: screeningCall.Model, APIKey: cfg.Anthropic.APIKey, BaseURL: cfg.Anthropic.BaseURL,
 			Instruction: screeningSkill.Body, Skill: screeningSkill.Version(),
 			MaxTokens: screeningCall.MaxTokens, Timeout: screeningCall.Timeout,
 			BatchSize: screeningCall.BatchSize, Concurrency: screeningCall.Concurrency,
+			ThinkingBudget: screeningCall.ThinkingBudget,
 		},
 		Sender: delivery.StoredFeishu{Store: store, Topic: job.Topic}, Now: time.Now,
 		Rules:              rules,
@@ -306,10 +302,6 @@ func serve(parent context.Context, cfg config.Config, options serveOptions, deps
 		}
 		screeningSkills[topic.ID] = skill
 	}
-	model := strings.TrimSpace(cfg.Anthropic.Model)
-	if model == "" {
-		model = digest.DefaultModel
-	}
 	store, err := openStore(parent, cfg)
 	if err != nil {
 		return err
@@ -328,10 +320,11 @@ func serve(parent context.Context, cfg config.Config, options serveOptions, deps
 		Screen: func(ctx context.Context, instruction string, list []papers.Paper) ([]digest.Decision, error) {
 			call := cfg.ScreeningCall()
 			return (digest.Screener{
-				Model: model, APIKey: cfg.Anthropic.APIKey, BaseURL: cfg.Anthropic.BaseURL,
+				Model: call.Model, APIKey: cfg.Anthropic.APIKey, BaseURL: cfg.Anthropic.BaseURL,
 				Instruction: instruction,
 				MaxTokens:   call.MaxTokens, Timeout: call.Timeout,
 				BatchSize: call.BatchSize, Concurrency: call.Concurrency,
+				ThinkingBudget: call.ThinkingBudget,
 			}).Screen(ctx, list)
 		},
 		Fetch: func(ctx context.Context, window papers.Window, searchQuery string) ([]papers.Paper, error) {

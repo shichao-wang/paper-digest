@@ -38,27 +38,55 @@ func TestModelGatewayConfig(t *testing.T) {
 	}
 }
 
-func TestModelCallDefaultsAndOverrides(t *testing.T) {
-	cfg, err := loadFixture(t, `{"topics":[{"id":"recommendation-advertising-search"}]}`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.ScreeningCall() != digest.DefaultScreeningCall() || cfg.SummaryCall() != digest.DefaultSummaryCall() {
-		t.Fatalf("defaults screen=%+v summary=%+v", cfg.ScreeningCall(), cfg.SummaryCall())
-	}
-	cfg, err = loadFixture(t, `{"anthropic":{"screening":{"max_tokens":32768,"timeout_seconds":240,"batch_size":4,"concurrency":3},"summary":{"max_tokens":12288,"timeout_seconds":150,"concurrency":2}},"topics":[{"id":"recommendation-advertising-search"}]}`)
+func TestAgentsArePerStageAndProviderStaysAConnection(t *testing.T) {
+	deployed := `{"anthropic":{"api_key":"k","model":"deepseek-flash","base_url":"https://api.deepseek.com/anthropic"},"topics":[{"id":"recommendation-advertising-search","skills":{"screening":"paper-screening","summary":"paper-summary"}}]}`
+	cfg, err := loadFixture(t, deployed)
 	if err != nil {
 		t.Fatal(err)
 	}
 	screen, summary := cfg.ScreeningCall(), cfg.SummaryCall()
-	if screen.MaxTokens != 32768 || screen.Timeout.Seconds() != 240 || screen.BatchSize != 4 || screen.Concurrency != 3 || summary.MaxTokens != 12288 || summary.Timeout.Seconds() != 150 {
-		t.Fatalf("overrides screen=%+v summary=%+v", screen, summary)
+	if screen.Model != "deepseek-flash" || summary.Model != "deepseek-flash" || screen.MaxTokens != digest.DefaultScreenMaxTokens || summary.MaxTokens != digest.DefaultSummaryMaxTokens || screen.ThinkingBudget != digest.ThinkingBudget || summary.Skill != "paper-summary" {
+		t.Fatalf("deployed config screen=%+v summary=%+v", screen, summary)
 	}
-	if _, err := loadFixture(t, `{"anthropic":{"screening":{"max_tokens":100}},"topics":[{"id":"recommendation-advertising-search"}]}`); err == nil || !strings.Contains(err.Error(), "max_tokens") {
+	screening, summarizing := cfg.SkillNames(currentTopic)
+	if screening != "paper-screening" || summarizing != "paper-summary" {
+		t.Fatalf("topic skills = %s %s", screening, summarizing)
+	}
+
+	cfg, err = loadFixture(t, `{"anthropic":{"model":"deepseek-flash"},"agents":{"screening":{"model":"other-model","skill":"custom-screen","max_tokens":32768,"timeout_seconds":240,"batch_size":4,"concurrency":3,"thinking":{"budget_tokens":4096}},"summary":{"max_tokens":12288,"timeout_seconds":150,"concurrency":2}},"topics":[{"id":"recommendation-advertising-search"}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	screen, summary = cfg.ScreeningCall(), cfg.SummaryCall()
+	if screen.Model != "other-model" || screen.Skill != "custom-screen" || screen.MaxTokens != 32768 || screen.Timeout.Seconds() != 240 || screen.BatchSize != 4 || screen.Concurrency != 3 || screen.ThinkingBudget != 4096 {
+		t.Fatalf("screening agent = %+v", screen)
+	}
+	if summary.Model != "deepseek-flash" || summary.MaxTokens != 12288 || summary.Timeout.Seconds() != 150 || summary.Skill != "paper-summary" {
+		t.Fatalf("summary agent = %+v", summary)
+	}
+	if got, _ := cfg.SkillNames(currentTopic); got != "custom-screen" {
+		t.Fatalf("agent skill = %s", got)
+	}
+
+	cfg, err = loadFixture(t, `{"agents":{"screening":{"skill":"custom-screen"}},"topics":[{"id":"recommendation-advertising-search","skills":{"screening":"paper-screening"}}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := cfg.SkillNames(currentTopic); got != "paper-screening" {
+		t.Fatalf("topic skill should replace the agent default, got %s", got)
+	}
+
+	if _, err := loadFixture(t, `{"anthropic":{"api_key":"sk-test-secret","model":"deepseek-flash","base_url":"https://api.deepseek.com/anthropic","screening":{"max_tokens":16384}},"topics":[{"id":"recommendation-advertising-search"}]}`); err == nil || !strings.Contains(err.Error(), "agents.screening") || strings.Contains(err.Error(), "sk-test-secret") {
+		t.Fatalf("provider screening field error = %v", err)
+	}
+	if _, err := loadFixture(t, `{"agents":{"screening":{"max_tokens":100}},"topics":[{"id":"recommendation-advertising-search"}]}`); err == nil || !strings.Contains(err.Error(), "agents.screening.max_tokens") {
 		t.Fatalf("invalid max_tokens error = %v", err)
 	}
-	if _, err := loadFixture(t, `{"anthropic":{"summary":{"batch_size":4}},"topics":[{"id":"recommendation-advertising-search"}]}`); err == nil || !strings.Contains(err.Error(), "batch_size") {
+	if _, err := loadFixture(t, `{"agents":{"summary":{"batch_size":4}},"topics":[{"id":"recommendation-advertising-search"}]}`); err == nil || !strings.Contains(err.Error(), "agents.summary") {
 		t.Fatalf("summary batch error = %v", err)
+	}
+	if _, err := loadFixture(t, `{"agents":{"screening":{"skill":"Not A Skill"}},"topics":[{"id":"recommendation-advertising-search"}]}`); err == nil || !strings.Contains(err.Error(), "agents.screening.skill") {
+		t.Fatalf("skill name error = %v", err)
 	}
 }
 

@@ -20,25 +20,28 @@ func TestPhaseDurationLeavesRoomForOneSpareAttempt(t *testing.T) {
 }
 
 func TestNormalizeRejectsLimitsOutsideTheSupportedRange(t *testing.T) {
-	screen, err := NormalizeScreen(0, 0, 0, 0)
+	screen, err := NormalizeScreen(CallInput{}, "agents.screening")
 	if err != nil || screen != DefaultScreeningCall() {
 		t.Fatalf("defaults = %+v, %v", screen, err)
 	}
-	summary, err := NormalizeSummary(0, 0, 0)
+	summary, err := NormalizeSummary(CallInput{}, "agents.summary")
 	if err != nil || summary != DefaultSummaryCall() {
 		t.Fatalf("summary defaults = %+v, %v", summary, err)
 	}
-	if _, err := NormalizeScreen(1024, 0, 0, 0); err == nil || !strings.Contains(err.Error(), "max_tokens") {
+	if _, err := NormalizeScreen(CallInput{MaxTokens: 1024}, "agents.screening"); err == nil || !strings.Contains(err.Error(), "agents.screening.max_tokens") {
 		t.Fatalf("small max_tokens error = %v", err)
 	}
-	if _, err := NormalizeSummary(0, 1, 0); err == nil {
+	if _, err := NormalizeSummary(CallInput{TimeoutSeconds: 1}, "agents.summary"); err == nil {
 		t.Fatal("one-second timeout was accepted")
 	}
-	if _, err := NormalizeScreen(0, 0, 0, 8); err == nil {
+	if _, err := NormalizeScreen(CallInput{Concurrency: 8}, "agents.screening"); err == nil {
 		t.Fatal("unbounded concurrency was accepted")
 	}
-	custom, err := NormalizeScreen(32768, 240, 4, 3)
-	if err != nil || custom.MaxTokens != 32768 || custom.Timeout != 240*time.Second || custom.BatchSize != 4 || custom.Concurrency != 3 {
+	if _, err := NormalizeScreen(CallInput{BudgetTokens: 16384}, "agents.screening"); err == nil || !strings.Contains(err.Error(), "budget_tokens") {
+		t.Fatalf("budget above max_tokens error = %v", err)
+	}
+	custom, err := NormalizeScreen(CallInput{Model: " other-model ", Skill: "custom-screen", MaxTokens: 32768, TimeoutSeconds: 240, BatchSize: 4, Concurrency: 3, BudgetTokens: 4096}, "agents.screening")
+	if err != nil || custom.Model != "other-model" || custom.Skill != "custom-screen" || custom.MaxTokens != 32768 || custom.Timeout != 240*time.Second || custom.BatchSize != 4 || custom.Concurrency != 3 || custom.ThinkingBudget != 4096 {
 		t.Fatalf("custom = %+v, %v", custom, err)
 	}
 }

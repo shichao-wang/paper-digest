@@ -31,17 +31,18 @@ type Decision struct {
 // A failed batch is retried. After the retries are exhausted the error is
 // returned and nothing is partially accepted.
 type Screener struct {
-	Model       string
-	APIKey      string
-	BaseURL     string
-	Instruction string
-	Skill       string
-	Attempts    int
-	BatchSize   int
-	Timeout     time.Duration
-	MaxTokens   int
-	Concurrency int
-	request     func(context.Context, string, string, string, string) (string, error)
+	Model          string
+	APIKey         string
+	BaseURL        string
+	Instruction    string
+	Skill          string
+	Attempts       int
+	BatchSize      int
+	Timeout        time.Duration
+	MaxTokens      int
+	Concurrency    int
+	ThinkingBudget int
+	request        func(context.Context, string, string, string, string) (string, error)
 }
 
 // Screen judges every paper. The result covers each input id exactly once.
@@ -71,11 +72,15 @@ func (s Screener) Screen(ctx context.Context, list []papers.Paper) ([]Decision, 
 	if maxTokens <= 0 {
 		maxTokens = DefaultScreenMaxTokens
 	}
+	budget := s.ThinkingBudget
+	if budget <= 0 {
+		budget = ThinkingBudget
+	}
 	request := s.request
 	if request == nil {
 		limit := maxTokens
 		request = func(ctx context.Context, apiKey, baseURL, model, prompt string) (string, error) {
-			return requestClaude(ctx, apiKey, baseURL, model, prompt, limit)
+			return requestClaude(ctx, apiKey, baseURL, model, prompt, limit, budget)
 		}
 	}
 	model := strings.TrimSpace(s.Model)

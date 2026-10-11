@@ -2,6 +2,7 @@ package digest
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -21,84 +22,125 @@ const (
 	DefaultSummaryConcurrency = 2
 	ScreenAttempts            = 3
 
-	minMaxTokens   = 4096
-	maxMaxTokens   = 65536
-	minTimeout     = 30 * time.Second
-	maxTimeout     = 10 * time.Minute
-	maxConcurrency = 4
-	maxBatchSize   = 16
+	minMaxTokens      = 4096
+	maxMaxTokens      = 65536
+	minTimeout        = 30 * time.Second
+	maxTimeout        = 10 * time.Minute
+	maxConcurrency    = 4
+	maxBatchSize      = 16
+	minThinkingBudget = 1024
 )
+
+// CallInput is the raw per-stage agent config. Zero values mean “use the default”.
+type CallInput struct {
+	Model          string
+	Skill          string
+	MaxTokens      int
+	TimeoutSeconds int
+	BatchSize      int
+	Concurrency    int
+	BudgetTokens   int
+}
 
 // CallSettings is one model call's output cap, timeout, and parallelism.
 // Zero values are not used after Normalize; omitted config fields become the defaults.
 type CallSettings struct {
-	MaxTokens   int
-	Timeout     time.Duration
-	BatchSize   int
-	Concurrency int
+	Model          string
+	Skill          string
+	MaxTokens      int
+	Timeout        time.Duration
+	BatchSize      int
+	Concurrency    int
+	ThinkingBudget int
 }
 
 func DefaultScreeningCall() CallSettings {
 	return CallSettings{
-		MaxTokens:   DefaultScreenMaxTokens,
-		Timeout:     DefaultScreenTimeout,
-		BatchSize:   DefaultScreenBatchSize,
-		Concurrency: DefaultScreenConcurrency,
+		Skill:          "paper-screening",
+		MaxTokens:      DefaultScreenMaxTokens,
+		Timeout:        DefaultScreenTimeout,
+		BatchSize:      DefaultScreenBatchSize,
+		Concurrency:    DefaultScreenConcurrency,
+		ThinkingBudget: ThinkingBudget,
 	}
 }
 
 func DefaultSummaryCall() CallSettings {
 	return CallSettings{
-		MaxTokens:   DefaultSummaryMaxTokens,
-		Timeout:     DefaultSummaryTimeout,
-		Concurrency: DefaultSummaryConcurrency,
+		Skill:          "paper-summary",
+		MaxTokens:      DefaultSummaryMaxTokens,
+		Timeout:        DefaultSummaryTimeout,
+		Concurrency:    DefaultSummaryConcurrency,
+		ThinkingBudget: ThinkingBudget,
 	}
 }
 
 // NormalizeScreen fills omitted screening fields and rejects values outside the supported range.
-func NormalizeScreen(maxTokens, timeoutSeconds, batchSize, concurrency int) (CallSettings, error) {
+// name is the config path used in errors, such as "agents.screening".
+func NormalizeScreen(in CallInput, name string) (CallSettings, error) {
 	out := DefaultScreeningCall()
-	if err := applyCall(&out, maxTokens, timeoutSeconds, concurrency, "anthropic.screening"); err != nil {
+	if err := applyCall(&out, in, name); err != nil {
 		return CallSettings{}, err
 	}
-	if batchSize != 0 {
-		if batchSize < 1 || batchSize > maxBatchSize {
-			return CallSettings{}, fmt.Errorf("anthropic.screening.batch_size 必须在 1 到 %d 之间", maxBatchSize)
+	if in.BatchSize != 0 {
+		if in.BatchSize < 1 || in.BatchSize > maxBatchSize {
+			return CallSettings{}, fmt.Errorf("%s.batch_size 必须在 1 到 %d 之间", name, maxBatchSize)
 		}
-		out.BatchSize = batchSize
+		out.BatchSize = in.BatchSize
+	}
+	if err := applyThinking(&out, in.BudgetTokens, name); err != nil {
+		return CallSettings{}, err
 	}
 	return out, nil
 }
 
 // NormalizeSummary fills omitted summary fields. Summaries are one paper per call, so there is no batch size.
-func NormalizeSummary(maxTokens, timeoutSeconds, concurrency int) (CallSettings, error) {
+func NormalizeSummary(in CallInput, name string) (CallSettings, error) {
 	out := DefaultSummaryCall()
-	if err := applyCall(&out, maxTokens, timeoutSeconds, concurrency, "anthropic.summary"); err != nil {
+	if err := applyCall(&out, in, name); err != nil {
+		return CallSettings{}, err
+	}
+	if err := applyThinking(&out, in.BudgetTokens, name); err != nil {
 		return CallSettings{}, err
 	}
 	return out, nil
 }
 
-func applyCall(out *CallSettings, maxTokens, timeoutSeconds, concurrency int, name string) error {
-	if maxTokens != 0 {
-		if maxTokens < minMaxTokens || maxTokens > maxMaxTokens {
+func applyCall(out *CallSettings, in CallInput, name string) error {
+	out.Model = strings.TrimSpace(in.Model)
+	if skill := strings.TrimSpace(in.Skill); skill != "" {
+		out.Skill = skill
+	}
+	if in.MaxTokens != 0 {
+		if in.MaxTokens < minMaxTokens || in.MaxTokens > maxMaxTokens {
 			return fmt.Errorf("%s.max_tokens 必须在 %d 到 %d 之间", name, minMaxTokens, maxMaxTokens)
 		}
-		out.MaxTokens = maxTokens
+		out.MaxTokens = in.MaxTokens
 	}
-	if timeoutSeconds != 0 {
-		timeout := time.Duration(timeoutSeconds) * time.Second
+	if in.TimeoutSeconds != 0 {
+		timeout := time.Duration(in.TimeoutSeconds) * time.Second
 		if timeout < minTimeout || timeout > maxTimeout {
 			return fmt.Errorf("%s.timeout_seconds 必须在 %d 到 %d 之间", name, int(minTimeout/time.Second), int(maxTimeout/time.Second))
 		}
 		out.Timeout = timeout
 	}
-	if concurrency != 0 {
-		if concurrency < 1 || concurrency > maxConcurrency {
+	if in.Concurrency != 0 {
+		if in.Concurrency < 1 || in.Concurrency > maxConcurrency {
 			return fmt.Errorf("%s.concurrency 必须在 1 到 %d 之间", name, maxConcurrency)
 		}
-		out.Concurrency = concurrency
+		out.Concurrency = in.Concurrency
 	}
+	return nil
+}
+
+func applyThinking(out *CallSettings, budget int, name string) error {
+	if budget == 0 {
+		budget = ThinkingBudget
+	}
+	if budget < minThinkingBudget || budget >= out.MaxTokens {
+		return fmt.Errorf("%s.thinking.budget_tokens 必须在 %d 到 %d 之间，并且小于 max_tokens（当前 %d）。DeepSeek 会忽略这个预算，思考计入 max_tokens", name, minThinkingBudget, out.MaxTokens-1, out.MaxTokens)
+	}
+	out.ThinkingBudget = budget
 	return nil
 }
 

@@ -26,14 +26,15 @@ type Analyzer interface {
 }
 
 type ClaudeAnalyzer struct {
-	Model       string
-	APIKey      string
-	BaseURL     string
-	Instruction string
-	Version     string
-	MaxTokens   int
-	Timeout     time.Duration
-	request     func(context.Context, string, string, string, string) (string, error)
+	Model          string
+	APIKey         string
+	BaseURL        string
+	Instruction    string
+	Version        string
+	MaxTokens      int
+	Timeout        time.Duration
+	ThinkingBudget int
+	request        func(context.Context, string, string, string, string) (string, error)
 }
 
 func (a ClaudeAnalyzer) Analyze(ctx context.Context, paper papers.Paper) (Summary, error) {
@@ -72,11 +73,15 @@ func (a ClaudeAnalyzer) Analyze(ctx context.Context, paper papers.Paper) (Summar
 	}
 	reqCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	budget := a.ThinkingBudget
+	if budget <= 0 {
+		budget = ThinkingBudget
+	}
 	request := a.request
 	if request == nil {
 		limit := maxTokens
 		request = func(ctx context.Context, apiKey, baseURL, model, prompt string) (string, error) {
-			return requestClaude(ctx, apiKey, baseURL, model, prompt, limit)
+			return requestClaude(ctx, apiKey, baseURL, model, prompt, limit, budget)
 		}
 	}
 	text, err := request(reqCtx, a.APIKey, a.BaseURL, model, instruction+"\n\n"+paperSection(paper))
@@ -101,15 +106,18 @@ func newClaudeClient(apiKey, baseURL string, opts ...option.RequestOption) anthr
 	return anthropic.NewClient(append(options, opts...)...)
 }
 
-func requestClaude(ctx context.Context, apiKey, baseURL, model, prompt string, maxTokens int) (string, error) {
+func requestClaude(ctx context.Context, apiKey, baseURL, model, prompt string, maxTokens, budgetTokens int) (string, error) {
 	if maxTokens <= 0 {
 		maxTokens = DefaultSummaryMaxTokens
+	}
+	if budgetTokens <= 0 {
+		budgetTokens = ThinkingBudget
 	}
 	client := newClaudeClient(apiKey, baseURL)
 	response, err := client.Messages.New(ctx, anthropic.MessageNewParams{
 		Model:     model,
 		MaxTokens: int64(maxTokens),
-		Thinking:  anthropic.ThinkingConfigParamOfEnabled(ThinkingBudget),
+		Thinking:  anthropic.ThinkingConfigParamOfEnabled(int64(budgetTokens)),
 		Messages: []anthropic.MessageParam{
 			anthropic.NewUserMessage(anthropic.NewTextBlock(prompt)),
 		},
@@ -121,7 +129,7 @@ func requestClaude(ctx context.Context, apiKey, baseURL, model, prompt string, m
 	// DeepSeek ignores budget_tokens, so a max_tokens stop usually means
 	// thinking consumed the whole output allowance and no answer was produced.
 	if response.StopReason == anthropic.StopReasonMaxTokens {
-		return "", fmt.Errorf("模型输出被 max_tokens=%d 截断（stop_reason=%q, output_tokens=%d）。思考模式仍开启，budget_tokens=%d 会被 DeepSeek 忽略，思考占用的是这段输出额度", maxTokens, response.StopReason, response.Usage.OutputTokens, ThinkingBudget)
+		return "", fmt.Errorf("模型输出被 max_tokens=%d 截断（stop_reason=%q, output_tokens=%d）。思考模式仍开启，budget_tokens=%d 会被 DeepSeek 忽略，思考占用的是这段输出额度", maxTokens, response.StopReason, response.Usage.OutputTokens, budgetTokens)
 	}
 	if response.StopReason != anthropic.StopReasonEndTurn {
 		return "", fmt.Errorf("模型输出未完成: stop_reason=%q, output_tokens=%d, max_tokens=%d", response.StopReason, response.Usage.OutputTokens, maxTokens)

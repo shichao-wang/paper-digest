@@ -316,16 +316,13 @@ func screenEval(ctx context.Context, cfg config.Config, topic string, dates []st
 			return nil, err
 		}
 	}
-	model := strings.TrimSpace(cfg.Anthropic.Model)
-	if model == "" {
-		model = digest.DefaultModel
-	}
 	call := cfg.ScreeningCall()
 	screener := digest.Screener{
-		Model: model, APIKey: cfg.Anthropic.APIKey, BaseURL: cfg.Anthropic.BaseURL,
+		Model: call.Model, APIKey: cfg.Anthropic.APIKey, BaseURL: cfg.Anthropic.BaseURL,
 		Instruction: skill.Body, Skill: skill.Version(),
 		MaxTokens: call.MaxTokens, Timeout: call.Timeout,
 		BatchSize: call.BatchSize, Concurrency: call.Concurrency,
+		ThinkingBudget: call.ThinkingBudget,
 	}
 	if notes == nil {
 		notes = map[string]eval.DayNote{}
