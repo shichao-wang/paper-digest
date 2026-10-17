@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/shichao-wang/paper-digest/internal/papers"
+	"github.com/shichao-wang/research-vault/internal/papers"
 )
 
 func TestRenderEmptyDigest(t *testing.T) {

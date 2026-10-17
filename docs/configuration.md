@@ -40,7 +40,7 @@
 
 规则在小写后的标题和摘要上匹配。`query.categories` 和 `query.terms`（`field` 为 `title` 或 `abstract`）组成 arXiv 的 `cat:` / `ti:` / `abs:` 查询，不用 `all:`。采集再并上该公告日的 `submittedDate`。页与页之间间隔 3 秒；最多 5 页只是防止这一天无限翻页，窗口还没翻完就碰到这个上限时会报错，而不是悄悄截断。`masks` 先从文本里去掉指定短语，并可以作为排除信号。`signals` 用 `pattern`、`categories` 或 `near` 三者之一；`unless` 指向已经定义、且自身没有 `unless` 的信号。`decisions` 按顺序采用第一条满足条件的分档。低于 `min_tier` 的论文不收集。收集结果按相关度再按首次发布日期排序，不按篇数截断。精筛之后才按模型分数重排，`max_papers` 只决定这个序列的前多少篇会生成摘要并写入当天日报。`SelectLoose` 仍是改规则之前的宽松基线，对照时仍最多 5 篇。
 
-草稿不写配置：`paper-digest eval --rules candidate.json`，或在「筛选评估」里编辑文本框后点「用草稿对照」。`paper-digest eval rules` 只打印当前主题的规则。确认后再把对象放进宿主机配置的 `topics[].selection`，执行 `docker compose up -d --force-recreate paper-digest`。容器只读挂载配置，这一步不构建镜像。
+草稿不写配置：`research-vault eval --rules candidate.json`，或在「筛选评估」里编辑文本框后点「用草稿对照」。`research-vault eval rules` 只打印当前主题的规则。确认后再把对象放进宿主机配置的 `topics[].selection`，执行 `docker compose up -d --force-recreate paper-digest`。容器只读挂载配置，这一步不构建镜像。
 
 ## 精筛和摘要技能
 
@@ -50,7 +50,7 @@
 
 精筛失败没有开关：重试耗尽、或生成截止（北京时间 09:00）到达时，当天不发送粗筛结果，任务记为 `missed`，原因出现在 `status`、日报历史和筛选评估里。关掉进程导致的取消不会记成 missed。
 
-评估默认不调用模型。`paper-digest eval --date YYYY-MM-DD --screen` 才会精筛，并可以加 `--skill 草稿.md` 试用一份未保存的技能。页面上对应的是「调用模型精筛」和技能文本框。这两种都只显示结果，不写数据库，也不发送。
+评估默认不调用模型。`research-vault eval --date YYYY-MM-DD --screen` 才会精筛，并可以加 `--skill 草稿.md` 试用一份未保存的技能。页面上对应的是「调用模型精筛」和技能文本框。这两种都只显示结果，不写数据库，也不发送。
 
 ## 删掉 lookback_days
 

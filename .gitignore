@@ -4,7 +4,7 @@
 *.db-*
 data/
 backups/
-/paper-digest
+/research-vault
 .DS_Store
 .claude/worktrees/
 web/node_modules/

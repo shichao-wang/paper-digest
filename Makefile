@@ -4,7 +4,7 @@
 
 help:
 	@echo 'check          Go tests, vet, and frontend type check/build (run npm --prefix web ci first)'
-	@echo 'build          Build web/dist and bin/paper-digest'
+	@echo 'build          Build web/dist and bin/research-vault'
 	@echo 'preview        Render offline Markdown fixture'
 	@echo 'dev            Start Go with config/config.local.json (see docs/development.md)'
 	@echo 'web-dev        Start Vite at 127.0.0.1:5173'
@@ -19,13 +19,13 @@ frontend-build:
 
 build: frontend-build
 	mkdir -p bin
-	go build -o bin/paper-digest ./cmd/paper-digest
+	go build -o bin/research-vault ./cmd/research-vault
 
 preview:
-	go run ./cmd/paper-digest preview ./testdata/preview.json
+	go run ./cmd/research-vault preview ./testdata/preview.json
 
 dev:
-	go run ./cmd/paper-digest --config config/config.local.json serve
+	go run ./cmd/research-vault --config config/config.local.json serve
 
 web-dev:
 	npm --prefix web run dev

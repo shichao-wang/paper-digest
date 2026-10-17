@@ -1,6 +1,6 @@
 # 贡献指南
 
-先按 [开发指南](docs/development.md) 安装依赖与创建隔离配置。应用入口在 `cmd/paper-digest/`，领域代码在 `internal/`，前端在 `web/`；完整职责见 [运行与目录职责](docs/architecture.md)。保持包路径、配置、CLI 与已有数据兼容，目录搬迁需同步引用和构建配置。
+先按 [开发指南](docs/development.md) 安装依赖与创建隔离配置。应用入口在 `cmd/research-vault/`，领域代码在 `internal/`，前端在 `web/`；完整职责见 [运行与目录职责](docs/architecture.md)。保持包路径、配置、CLI 与已有数据兼容，目录搬迁需同步引用和构建配置。
 
 提交前执行：
 

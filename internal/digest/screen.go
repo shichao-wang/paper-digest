@@ -12,8 +12,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/shichao-wang/paper-digest/internal/papers"
-	"github.com/shichao-wang/paper-digest/skills"
+	"github.com/shichao-wang/research-vault/internal/papers"
+	"github.com/shichao-wang/research-vault/skills"
 )
 
 const maxReasonRunes = 200

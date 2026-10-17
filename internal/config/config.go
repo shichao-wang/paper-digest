@@ -11,9 +11,9 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/shichao-wang/paper-digest/internal/digest"
-	"github.com/shichao-wang/paper-digest/internal/papers"
-	"github.com/shichao-wang/paper-digest/skills"
+	"github.com/shichao-wang/research-vault/internal/digest"
+	"github.com/shichao-wang/research-vault/internal/papers"
+	"github.com/shichao-wang/research-vault/skills"
 )
 
 var topicIDPattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)

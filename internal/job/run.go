@@ -8,10 +8,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/shichao-wang/paper-digest/internal/delivery"
-	"github.com/shichao-wang/paper-digest/internal/digest"
-	"github.com/shichao-wang/paper-digest/internal/papers"
-	"github.com/shichao-wang/paper-digest/internal/state"
+	"github.com/shichao-wang/research-vault/internal/delivery"
+	"github.com/shichao-wang/research-vault/internal/digest"
+	"github.com/shichao-wang/research-vault/internal/papers"
+	"github.com/shichao-wang/research-vault/internal/state"
 )
 
 const Topic = "recommendation-advertising-search"

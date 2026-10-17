@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
-	"github.com/shichao-wang/paper-digest/internal/papers"
+	"github.com/shichao-wang/research-vault/internal/papers"
 )
 
 func TestClaudeAnalyzerUsesConfiguredModelAndTraceablePrompt(t *testing.T) {

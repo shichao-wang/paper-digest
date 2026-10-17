@@ -7,7 +7,9 @@
 | [configuration.md](configuration.md) | JSON 字段、实际配置与示例、主题、技能目录、模型网关、Webhook，以及删除 `arxiv.lookback_days` 的迁移 |
 | [development.md](development.md) | 环境、构建、双终端开发、离线演示和 CLI |
 | [operations.md](operations.md) | Compose 部署、更新、试发、调度状态、备份与故障定位 |
+| [renaming.md](renaming.md) | 项目、模块、CLI 和部署名称对应关系与兼容决定 |
 | [architecture.md](architecture.md) | 数据流、接口边界、目录职责及兼容限制 |
+| [2026-10-17-renaming-deployment.md](2026-10-17-renaming-deployment.md) | 更名部署、保留的数据卷、备份验证和回退入口 |
 | [2026-10-07-delivery-investigation.md](2026-10-07-delivery-investigation.md) | 当日格式修复、停推与数据库排查的历史证据 |
 
 当前使用说明按职责维护，每项流程只在对应文档详细描述，README 保留最短可执行入口与导航。历史记录保留日期与原路径；记录里的本机端口、临时镜像和工作区状态不能作为通用部署指南。新增排查记录用 `YYYY-MM-DD-主题.md` 命名并加入此索引。

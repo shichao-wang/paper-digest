@@ -4,7 +4,7 @@
 
 ## 数据流与边界
 
-`cmd/paper-digest` 加载 JSON、打开 SQLite、迁移旧 Webhook 并启动 HTTP 服务；`delivery.enabled=true` 时才校验模型密钥、恢复中断发送状态、启动单个 worker。HTTP 服务与 worker 共用 Store，取消与退出时等请求和任务完成后关闭数据库。
+`cmd/research-vault` 加载 JSON、打开 SQLite、迁移旧 Webhook 并启动 HTTP 服务；`delivery.enabled=true` 时才校验模型密钥、恢复中断发送状态、启动单个 worker。HTTP 服务与 worker 共用 Store，取消与退出时等请求和任务完成后关闭数据库。
 
 worker 在北京时间 08:00～09:00 按一个 arXiv 公告日获取公开元数据。arXiv 在美东 14:00 截止、20:00 公告，公告日是周日到周四；周五和周六不公告。周日公告覆盖周四 14:00 到周五 14:00 的提交，周一公告覆盖周五 14:00 到周一 14:00，周二到周四各覆盖前一个截止时刻到当天 14:00。日报日期 D 取严格早于当天北京时间 08:00 的最新一次公告。夏令时这次公告落在次日北京时间 08:00，冬令时落在次日 09:00，所以都要到下一个北京时间早晨才采集。对应关系在两个时令下相同：周二采集周日公告，周三采集周一公告，周四采集周二公告，周五采集周三公告，周六采集周四公告，周日和周一没有新公告。周日和周一写成空日报，不把上一批再采一遍。相邻公告的提交区间首尾相接，每一分钟只属于一天。替换版本和事后交叉列表仍用原来的提交时间，不会再次进入日报。arXiv 遇美国节日偶尔推迟公告，程序不维护节日表，推迟的那一批不会被下一天补进来。
 
@@ -12,7 +12,7 @@ worker 在北京时间 08:00～09:00 按一个 arXiv 公告日获取公开元数
 
 调度只处理当天的北京时间日期，不补停机期间错过的公告日。08:00～09:00 创建或恢复当天任务；09:00 的一分钟内只发送当天已就绪的日报。09:01 起把当天未完成的任务记为 missed，不自动补发，第二天也不再生成这一天。
 
-筛选评估（`paper-digest eval`、`GET /api/eval` 与 `POST /api/eval`）用已加载的规则预览指定的北京时间日报日期。`--date` 是开始日，`--to` 含首尾，最多 14 天。每一天使用上面的公告日映射；没有新公告的日期结果为空。它列出该公告日里全部粗筛收集到的论文、粗筛上限内的前缀，以及精筛之后会推送的那些。已保存的精筛结论会直接显示。`POST` 和 `eval --rules` 额外编译一份草稿规则；`eval --screen` 和页面上的勾选才会调用模型，可另附一份草稿 `SKILL.md`。这些预览不写回配置或技能文件，不发送，也不写入 `jobs`、`job_papers`、`papers`、`screening` 或 `recommendations`。打开页面不会调用模型。宽松基线 `SelectLoose` 只用于对照，不参与日报。人工判断写入 `selection_labels`；精筛结论写入 `screening`。旧数据库在打开时用 `CREATE TABLE IF NOT EXISTS` 建表。预览可能访问 arXiv，因此这次请求的处理时限长于其他 API。有精筛结论时精确率按精筛后将推送的论文计算，否则按粗筛上限内的论文计算。
+筛选评估（`research-vault eval`、`GET /api/eval` 与 `POST /api/eval`）用已加载的规则预览指定的北京时间日报日期。`--date` 是开始日，`--to` 含首尾，最多 14 天。每一天使用上面的公告日映射；没有新公告的日期结果为空。它列出该公告日里全部粗筛收集到的论文、粗筛上限内的前缀，以及精筛之后会推送的那些。已保存的精筛结论会直接显示。`POST` 和 `eval --rules` 额外编译一份草稿规则；`eval --screen` 和页面上的勾选才会调用模型，可另附一份草稿 `SKILL.md`。这些预览不写回配置或技能文件，不发送，也不写入 `jobs`、`job_papers`、`papers`、`screening` 或 `recommendations`。打开页面不会调用模型。宽松基线 `SelectLoose` 只用于对照，不参与日报。人工判断写入 `selection_labels`；精筛结论写入 `screening`。旧数据库在打开时用 `CREATE TABLE IF NOT EXISTS` 建表。预览可能访问 arXiv，因此这次请求的处理时限长于其他 API。有精筛结论时精确率按精筛后将推送的论文计算，否则按粗筛上限内的论文计算。
 
 候选论文、版本和逐篇中文摘要写入 SQLite，全部完成后将日报记为 `ready`。模型摘要保存模型名称和提示版本；新摘要的提示版本是摘要技能名加正文哈希，例如 `paper-summary@0123abcd`。要点格式仍为 `- **标签**：正文`。渲染日报和发送卡片时也会规范历史标签，不改写存档。摘要完整性校验检查数学分隔符并跳过 Markdown 代码和链接目标。模型请求使用 Anthropic Messages 兼容接口，并开启思考。`anthropic` 只提供密钥、地址和默认模型；`agents.screening` 与 `agents.summary` 各自设置模型、技能、`max_tokens`、超时、并发和 `thinking.budget_tokens`（默认 2048，且必须小于该阶段的 `max_tokens`）。省略 `agents` 时精筛默认 16384、单次 180 秒、每批 8 篇、并发 2，摘要默认 8192、单次 120 秒、并发 2。DeepSeek 会忽略 `budget_tokens`，所以思考计入 `max_tokens`。`stop_reason=max_tokens` 的结果不保存，错误写明这次的上限和预算。精筛每批最多 3 次，截止估算按每一批都会用满这 3 次。摘要每次只请求一次。生成开始前会按这些超时估算能否在 09:00 前完成，来不及则当天不发送。
 
@@ -23,8 +23,8 @@ worker 在北京时间 08:00～09:00 按一个 arXiv 公告日获取公开元数
 ## 目录职责
 
 ```text
-paper-digest/
-├── cmd/paper-digest/       CLI、依赖装配、HTTP/worker 生命周期
+research-vault/
+├── cmd/research-vault/       CLI、依赖装配、HTTP/worker 生命周期
 ├── internal/
 │   ├── config/            JSON 加载、主题和 URL 校验
 │   ├── papers/            arXiv Atom 抓取、稳定 ID、选题和排序

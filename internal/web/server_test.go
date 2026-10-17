@@ -13,11 +13,11 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"github.com/shichao-wang/paper-digest/internal/config"
-	"github.com/shichao-wang/paper-digest/internal/digest"
-	"github.com/shichao-wang/paper-digest/internal/job"
-	"github.com/shichao-wang/paper-digest/internal/papers"
-	"github.com/shichao-wang/paper-digest/internal/state"
+	"github.com/shichao-wang/research-vault/internal/config"
+	"github.com/shichao-wang/research-vault/internal/digest"
+	"github.com/shichao-wang/research-vault/internal/job"
+	"github.com/shichao-wang/research-vault/internal/papers"
+	"github.com/shichao-wang/research-vault/internal/state"
 )
 
 func testHandler(t *testing.T) (*state.Store, http.Handler) {

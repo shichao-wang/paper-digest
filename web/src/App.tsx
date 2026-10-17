@@ -143,7 +143,7 @@ export default function App() {
   return <div className="app-shell">
     <a className="skip-link" href="#main-content">跳到主要内容</a>
     <header className="header">
-      <div className="brand"><div className="brand-mark" aria-hidden="true"><i /><i /><i /></div><div><h1>论文日报</h1><p>每日精选，留待细读</p></div></div>
+      <div className="brand"><div className="brand-mark" aria-hidden="true"><i /><i /><i /></div><div><h1>Research Vault</h1><p>每日精选，留待细读</p></div></div>
       <button className="navigation-toggle secondary" ref={menuButton} aria-expanded={navigationOpen} aria-controls="topic-navigation" onClick={() => setNavigationOpen(value => !value)}>{navigationOpen ? '收起导航' : '主题导航'} <span aria-hidden="true">☰</span></button>
     </header>
     <div className="app-layout">

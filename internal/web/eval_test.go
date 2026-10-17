@@ -11,13 +11,13 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/shichao-wang/paper-digest/internal/config"
-	"github.com/shichao-wang/paper-digest/internal/digest"
-	"github.com/shichao-wang/paper-digest/internal/eval"
-	"github.com/shichao-wang/paper-digest/internal/job"
-	"github.com/shichao-wang/paper-digest/internal/papers"
-	"github.com/shichao-wang/paper-digest/internal/state"
-	"github.com/shichao-wang/paper-digest/skills"
+	"github.com/shichao-wang/research-vault/internal/config"
+	"github.com/shichao-wang/research-vault/internal/digest"
+	"github.com/shichao-wang/research-vault/internal/eval"
+	"github.com/shichao-wang/research-vault/internal/job"
+	"github.com/shichao-wang/research-vault/internal/papers"
+	"github.com/shichao-wang/research-vault/internal/state"
+	"github.com/shichao-wang/research-vault/skills"
 )
 
 func TestEvalPreviewAndLabelsDoNotMutateTheDigest(t *testing.T) {

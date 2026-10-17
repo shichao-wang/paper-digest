@@ -1,4 +1,4 @@
-module github.com/shichao-wang/paper-digest
+module github.com/shichao-wang/research-vault
 
 go 1.27
 
