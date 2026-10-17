@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/shichao-wang/paper-digest/internal/config"
-	"github.com/shichao-wang/paper-digest/internal/digest"
+	"github.com/shichao-wang/research-vault/internal/config"
+	"github.com/shichao-wang/research-vault/internal/digest"
 )
 
 type Sender interface {

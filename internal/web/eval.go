@@ -12,10 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/shichao-wang/paper-digest/internal/eval"
-	"github.com/shichao-wang/paper-digest/internal/papers"
-	"github.com/shichao-wang/paper-digest/internal/state"
-	"github.com/shichao-wang/paper-digest/skills"
+	"github.com/shichao-wang/research-vault/internal/eval"
+	"github.com/shichao-wang/research-vault/internal/papers"
+	"github.com/shichao-wang/research-vault/internal/state"
+	"github.com/shichao-wang/research-vault/skills"
 )
 
 func defaultEvalFetch(ctx context.Context, window papers.Window, searchQuery string) ([]papers.Paper, error) {

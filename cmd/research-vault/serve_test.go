@@ -16,9 +16,9 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/shichao-wang/paper-digest/internal/config"
-	"github.com/shichao-wang/paper-digest/internal/job"
-	"github.com/shichao-wang/paper-digest/internal/state"
+	"github.com/shichao-wang/research-vault/internal/config"
+	"github.com/shichao-wang/research-vault/internal/job"
+	"github.com/shichao-wang/research-vault/internal/state"
 )
 
 type workerFunc func(context.Context, *slog.Logger) error

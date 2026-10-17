@@ -13,16 +13,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/shichao-wang/paper-digest/internal/config"
-	"github.com/shichao-wang/paper-digest/internal/digest"
-	"github.com/shichao-wang/paper-digest/internal/eval"
-	"github.com/shichao-wang/paper-digest/internal/job"
-	"github.com/shichao-wang/paper-digest/internal/papers"
-	"github.com/shichao-wang/paper-digest/internal/state"
-	"github.com/shichao-wang/paper-digest/skills"
+	"github.com/shichao-wang/research-vault/internal/config"
+	"github.com/shichao-wang/research-vault/internal/digest"
+	"github.com/shichao-wang/research-vault/internal/eval"
+	"github.com/shichao-wang/research-vault/internal/job"
+	"github.com/shichao-wang/research-vault/internal/papers"
+	"github.com/shichao-wang/research-vault/internal/state"
+	"github.com/shichao-wang/research-vault/skills"
 )
 
-const evalUsage = "用法: paper-digest eval --date YYYY-MM-DD [--to YYYY-MM-DD] [--rules candidate.json] [--input papers.json] [--screen] [--skill SKILL.md] [--json]\n      --date 和 --to 是北京时间日报日期，含首尾，最多 14 天。每一天只预览对应的一个 arXiv 公告日；周日和周一没有新公告。\n      --screen 会调用模型做精筛并产生费用；不加它只显示已经保存的精筛结论。--skill 是草稿精筛技能，必须和 --screen 一起用，不会写回文件。\n      paper-digest eval rules [--topic id]\n      paper-digest eval label --id <arxiv id> --label relevant|not-relevant|clear [--input papers.json]\n      paper-digest eval fixtures"
+const evalUsage = "用法: research-vault eval --date YYYY-MM-DD [--to YYYY-MM-DD] [--rules candidate.json] [--input papers.json] [--screen] [--skill SKILL.md] [--json]\n      --date 和 --to 是北京时间日报日期，含首尾，最多 14 天。每一天只预览对应的一个 arXiv 公告日；周日和周一没有新公告。\n      --screen 会调用模型做精筛并产生费用；不加它只显示已经保存的精筛结论。--skill 是草稿精筛技能，必须和 --screen 一起用，不会写回文件。\n      research-vault eval rules [--topic id]\n      research-vault eval label --id <arxiv id> --label relevant|not-relevant|clear [--input papers.json]\n      research-vault eval fixtures"
 
 var fetchEvalPapers = func(ctx context.Context, window papers.Window, searchQuery string) ([]papers.Paper, error) {
 	fetchCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)

@@ -1,3 +1,6 @@
+# 保留既有部署项目与数据卷，仓库目录改名不改变默认卷前缀。
+name: paper-digest
+
 services:
   paper-digest:
     build: .
@@ -11,7 +14,7 @@ services:
       - ./config/config.json:/app/config/config.json:ro
       - ./skills:/app/skills:ro
     healthcheck:
-      test: ["CMD", "/usr/local/bin/paper-digest", "health"]
+      test: ["CMD", "/usr/local/bin/research-vault", "health"]
       interval: 30s
       timeout: 5s
       retries: 3

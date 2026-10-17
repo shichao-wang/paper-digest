@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/shichao-wang/paper-digest/internal/delivery"
-	"github.com/shichao-wang/paper-digest/internal/papers"
+	"github.com/shichao-wang/research-vault/internal/delivery"
+	"github.com/shichao-wang/research-vault/internal/papers"
 )
 
 func TestServeWaitsForBackgroundWorkAndDeliveryOutcome(t *testing.T) {

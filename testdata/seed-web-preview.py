@@ -40,4 +40,4 @@ conn.execute('INSERT INTO papers VALUES(?,?,?,?)', (other_topic, other_paper['ID
 conn.execute('INSERT INTO job_papers VALUES(?,?,?,?,?,?)', (other_topic, '2026-10-01', other_paper['ID'], other_paper['Version'], 0, json.dumps(dict(Text='另一个主题的中文要点 [Demo]', Model='demo-model', PromptVersion='demo'))))
 conn.commit()
 conn.close()
-(root / 'config.json').write_text(json.dumps(dict(database=dict(path=str(root / 'digest.db')),delivery=dict(enabled=False),anthropic=dict(api_key='',model='',base_url=''),arxiv=dict(lookback_days=7),topics=[dict(id=topic),dict(id=other_topic)]), indent=2))
+(root / 'config.json').write_text(json.dumps(dict(database=dict(path=str(root / 'digest.db')),delivery=dict(enabled=False),anthropic=dict(api_key='',model='',base_url=''),topics=[dict(id=topic),dict(id=other_topic)]), indent=2))

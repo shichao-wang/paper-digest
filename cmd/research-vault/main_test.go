@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/shichao-wang/paper-digest/internal/job"
-	"github.com/shichao-wang/paper-digest/internal/state"
+	"github.com/shichao-wang/research-vault/internal/job"
+	"github.com/shichao-wang/research-vault/internal/state"
 )
 
 func configArgs(t *testing.T, database, webhook, apiKey string, enabled bool, args ...string) []string {

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/shichao-wang/paper-digest/internal/papers"
+	"github.com/shichao-wang/research-vault/internal/papers"
 )
 
 const maxRangeDays = 14

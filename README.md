@@ -1,6 +1,6 @@
-# 论文日报
+# Research Vault
 
-Go + React 的本机论文日报服务。每天北京时间 08:00～09:00 收集一个 arXiv 公告日里的推荐、广告或搜索论文：规则先做粗筛，精筛技能再让模型判断相关性，然后按分数取每天推送上限（默认 5 篇）生成中文要点。09:00 的一分钟内向飞书群机器人逐篇发送 Markdown 卡片。精筛失败则当天不发送。周日和周一没有新公告，日报为空，不重复上一批。SQLite 保存已推送的精选、摘要版本、精筛结论、发送状态与去重历史，网页提供论文库、日报历史和主题推送配置。
+Research Vault 是 Go + React 的本机论文库与日报服务。每天北京时间 08:00～09:00 收集一个 arXiv 公告日里的推荐、广告或搜索论文：规则先做粗筛，精筛技能再让模型判断相关性，然后按分数取每天推送上限（默认 5 篇）生成中文要点。09:00 的一分钟内向飞书群机器人逐篇发送 Markdown 卡片。精筛失败则当天不发送。周日和周一没有新公告，日报为空，不重复上一批。SQLite 保存已推送的精选、摘要版本、精筛结论、发送状态与去重历史，网页提供论文库、日报历史和主题推送配置。
 
 **默认关闭自动任务**：示例中的 `delivery.enabled=false` 同时关闭采集、模型调用和推送，仍可浏览已有数据。空库不会自动填入示例。中文要点依据公开摘要，不能视为全文解读；当前自动任务只支持 `recommendation-advertising-search` 联合主题。
 
@@ -33,7 +33,7 @@ docker compose logs --tail=100 paper-digest
 ```bash
 npm --prefix web ci
 make check   # Go 测试、vet、TypeScript 检查与前端构建
-make build   # 前端与 Go 二进制，输出 bin/paper-digest
+make build   # 前端与 Go 二进制，输出 bin/research-vault
 make preview # 仅渲染离线 fixture，不访问外部服务
 ```
 
@@ -45,14 +45,16 @@ make preview # 仅渲染离线 fixture，不访问外部服务
 
 草稿可以先对照，再决定要不要写进配置。预览不生成摘要、不发送飞书、不把论文标为已读，也不写入日报任务，也不会改正在使用的配置。
 
-1. 起草规则。页面打开 http://127.0.0.1:8081 ，侧栏进入「筛选评估」，文本框里是当前规则，改过之后点「用草稿对照」。或先执行 `paper-digest eval rules` 把当前规则打出来，另存为 `candidate.json` 再改。
-2. 对照当前规则。命令行执行 `docker exec paper-digest-paper-digest-1 /usr/local/bin/paper-digest eval --date 2026-10-09 --rules candidate.json`。日期段加上 `--to`。`--input papers.json` 用本地候选，不访问 arXiv。`--json` 输出完整结果。结果同时给出草稿、当前规则、宽松旧基线、已保存精筛结论和当天已保存的日报。不加 `--screen` 不会调用模型。
+1. 起草规则。页面打开 http://127.0.0.1:8081 ，侧栏进入「筛选评估」，文本框里是当前规则，改过之后点「用草稿对照」。或先执行 `research-vault eval rules` 把当前规则打出来，另存为 `candidate.json` 再改。
+2. 对照当前规则。命令行执行 `docker compose exec -T paper-digest research-vault eval --date 2026-10-09 --rules candidate.json`。日期段加上 `--to`。`--input papers.json` 用本地候选，不访问 arXiv。`--json` 输出完整结果。结果同时给出草稿、当前规则、宽松旧基线、已保存精筛结论和当天已保存的日报。不加 `--screen` 不会调用模型。
 3. 需要看模型精筛时再加 `--screen`。这会产生费用，并且不发送、不写日报。`--skill 草稿.md` 试用一份技能文本，不改 `skills/` 里的文件。页面上勾选「调用模型精筛」，文本框里是当前精筛技能，改过的内容也只用于这一次。打开页面本身不会调用模型。
-4. 标注。页面对每篇点「相关」或「不相关」。命令行可以执行 `paper-digest eval label --id arxiv:2610.10483 --label relevant --input papers.json`；省略 `--input` 时只更新判断，并保留已有论文快照。判断保存在 SQLite 的 `selection_labels`，打开数据库时自动建表。有精筛结论时，精确率按精筛后将推送的论文计算。
-5. 需要回归样本时执行 `paper-digest eval fixtures`，或打开 `/api/eval/fixtures`。导出的 JSON 用 `positive` / `negative` 区分。
+4. 标注。页面对每篇点「相关」或「不相关」。命令行可以执行 `research-vault eval label --id arxiv:2610.10483 --label relevant --input papers.json`；省略 `--input` 时只更新判断，并保留已有论文快照。判断保存在 SQLite 的 `selection_labels`，打开数据库时自动建表。有精筛结论时，精确率按精筛后将推送的论文计算。
+5. 需要回归样本时执行 `research-vault eval fixtures`，或打开 `/api/eval/fixtures`。导出的 JSON 用 `positive` / `negative` 区分。
 6. 确认后再把 `selection` 放进宿主机的 `config/config.json`，技能则直接改 `skills/` 里的文件，然后 `docker compose up -d --force-recreate paper-digest`。这一步只重新创建容器，不构建镜像。
 
 `preview <fixture.json>` 仍只离线渲染 Markdown，不负责选题。
+
+项目、CLI 与部署名称的对应关系见[命名与部署兼容](docs/renaming.md)。CLI 已改为 `research-vault`；Compose 服务和默认项目名仍为 `paper-digest`，沿用原数据卷。
 
 ## 文档导航
 

@@ -12,7 +12,7 @@ make check
 make build
 ```
 
-`make check` 依次执行 `go test ./...`、`go vet ./...`、`npm --prefix web run build`；前端构建包含 TypeScript 检查。`make build` 同时生成 `web/dist/` 和 `bin/paper-digest`。Go 服务从磁盘读取前端，资源没有嵌入二进制，因此发布时两者都需要。
+`make check` 依次执行 `go test ./...`、`go vet ./...`、`npm --prefix web run build`；前端构建包含 TypeScript 检查。`make build` 同时生成 `web/dist/` 和 `bin/research-vault`。Go 服务从磁盘读取前端，资源没有嵌入二进制，因此发布时两者都需要。
 
 没有 Make 时直接执行：
 
@@ -21,7 +21,7 @@ go test ./...
 go vet ./...
 npm --prefix web run build
 mkdir -p bin
-go build -o bin/paper-digest ./cmd/paper-digest
+go build -o bin/research-vault ./cmd/research-vault
 ```
 
 ## 宿主机运行
@@ -33,7 +33,7 @@ cp config/config.local.example.json config/config.local.json
 chmod 600 config/config.local.json
 mkdir -p data/local
 npm --prefix web run build
-go run ./cmd/paper-digest --config config/config.local.json serve
+go run ./cmd/research-vault --config config/config.local.json serve
 ```
 
 打开 http://127.0.0.1:8080。该示例关闭自动任务；无需凭据，数据库为空。实际配置被忽略，不应提交。`serve` 默认监听 `127.0.0.1:8080` 并读取 `web/dist`，可用 `--listen`、`--web-dir` 修改。`--config` 必须位于子命令之前；相对配置、数据库和静态资源路径均基于进程工作目录。
@@ -44,7 +44,7 @@ go run ./cmd/paper-digest --config config/config.local.json serve
 
 ```bash
 make dev
-# 等价于 go run ./cmd/paper-digest --config config/config.local.json serve
+# 等价于 go run ./cmd/research-vault --config config/config.local.json serve
 ```
 
 终端二运行：
@@ -62,7 +62,7 @@ make web-dev
 npm --prefix web ci
 npm --prefix web run build
 python3 testdata/seed-web-preview.py
-go run ./cmd/paper-digest --config data/web-preview/config.json serve
+go run ./cmd/research-vault --config data/web-preview/config.json serve
 ```
 
 打开 http://127.0.0.1:8080。脚本只写入被忽略的 `data/web-preview/`，创建两个主题，使用相同日期和论文 ID 的不同虚构内容验证隔离，标题均标记 `[Demo]`。不会访问 arXiv、模型或飞书，实际论文库也不会自动加载这些数据。
@@ -71,7 +71,7 @@ go run ./cmd/paper-digest --config data/web-preview/config.json serve
 
 ```bash
 python3 testdata/seed-web-preview.py --output data/web-preview-2
-go run ./cmd/paper-digest --config data/web-preview-2/config.json serve
+go run ./cmd/research-vault --config data/web-preview-2/config.json serve
 ```
 
 ## CLI 与验证范围
@@ -92,7 +92,7 @@ go run ./cmd/paper-digest --config data/web-preview-2/config.json serve
 ```bash
 make preview
 # 服务运行后，另一个终端检查健康
-go run ./cmd/paper-digest health
+go run ./cmd/research-vault health
 ```
 
 Go 测试以 fixture、临时 SQLite 和模拟 HTTP 为主，不验证真实投递或真实模型可用性。仓库当前没有 CI 工作流，提交前需手动运行 `make check`。改变运行语义、配置字段、API 或文件路径时，同步更新对应文档与引用。

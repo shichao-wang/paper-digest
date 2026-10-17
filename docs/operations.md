@@ -14,7 +14,7 @@ docker compose config --quiet
 docker compose up -d --build
 docker compose ps
 docker compose logs --tail=100 paper-digest
-docker compose exec -T paper-digest paper-digest health
+docker compose exec -T paper-digest research-vault health
 ```
 
 打开 http://127.0.0.1:8080。Compose 只暴露宿主机回环端口；Cloudflare Tunnel 不是日报任务依赖。镜像通过 Node 24 构建前端、Go 1.27 构建后端，在 Alpine 中以非 root 用户运行，运行时不需要 Node。静态资源在 `/app/web/dist`，实际配置只读挂载到 `/app/config/config.json`，数据库在 `digest-data` 数据卷。
@@ -31,6 +31,18 @@ docker compose up -d --force-recreate paper-digest
 
 筛选规则在 `topics[].selection`。改规则时编辑宿主机上的 `config.json`，然后用上面的命令重新创建容器，不要加 `--build`。配置是只读挂载，没有热加载，重启后下一次日报才会使用新规则。页面修改 Webhook 无需重启。仅更改 Compose 运行参数通常只需 `docker compose up -d`。停用自动任务可将 `delivery.enabled` 设为 `false` 后重新创建容器；这同时关闭采集和模型调用。`docker compose stop` 停止全部服务，`docker compose down` 移除容器和网络、保留命名卷；**不要运行 `docker compose down -v`，它会删除数据**。不同项目名会得到不同命名卷，迁移目录或加 `-p` 前须核对原卷。
 
+## 仓库改名后的部署切换
+
+默认 Compose 项目和服务仍为 `paper-digest`，默认实际卷仍为 `paper-digest_digest-data`。CLI 已改为 `research-vault`，详见[命名表](renaming.md)。已有部署的端口、项目名和挂载路径可能与仓库示例不同，不能仅凭目录名重建。
+
+1. 先只读核对 `docker compose ls`，使用 `docker inspect` 查看目标容器的 Compose 标签、端口和 Mounts。记录实际项目、卷、配置及技能来源。目录更名后，确认新的配置文件存在，挂载仍为只读。不要输出实际配置正文或 Webhook。
+2. 在北京时间 08:00～09:01 以外操作。构建新镜像时不停止旧容器。记录旧镜像 ID 并用本地标签保留，用于回退。按[备份流程](#备份与恢复)创建 SQLite 一致性快照；旧镜像仍使用 `paper-digest backup`，新镜像使用 `research-vault backup`。验证备份的 `PRAGMA integrity_check` 为 `ok`，保管好权限受限的宿主机副本。
+3. 准备该部署专用的 Compose 文件，显式保留原项目名、原命名卷及端口，只修复仓库配置和技能的挂载路径。使用 `docker compose -p <原项目名> -f <部署文件> config --quiet` 检查。后续命令始终携带同一组 `-p` 与 `-f`，不要使用另一份默认配置启动第二个项目。
+4. 用该部署文件重新创建同一个服务，运行新镜像与新 CLI。核对健康、挂载及实例数量。切换后再生成一致性快照，比较论文、摘要、Webhook、日报任务、筛选结论、推荐历史和人工判断的表结构、行数及内容摘要，只输出是否相同，不输出敏感数据。此次更名不改变数据库结构，数据应保持一致。
+5. 若新服务不健康，停止新实例，用已保留的旧镜像及旧 CLI 入口、健康检查重新创建原服务，沿用已修正的配置路径和原数据卷。原镜像没有数据库结构变更时，不要覆盖数据库。只有确认数据受损，才停止所有使用原卷的进程，先保存现场，再按恢复流程还原已验证备份。
+
+切换验证只检查健康、界面和已有数据，不运行精筛、模型或试发。维护记录应写明最终镜像、部署文件、挂载及回退镜像；配置、数据库和备份不提交到仓库。
+
 ## 受控飞书试发
 
 先在飞书确认目标群和群机器人身份，将联合主题机器人的 HTTPS Webhook 保存到「主题管理」中联合主题的推送配置，**保持 `delivery.enabled=false`**。本命令不需要模型密钥、不抓论文，读取数据库中保存的当前地址，只发送以下固定文本：
@@ -40,7 +52,7 @@ docker compose up -d --force-recreate paper-digest
 确认群、身份和以上内容后，在容器已运行的情况下执行：
 
 ```bash
-docker compose exec -T paper-digest paper-digest send-test --topic recommendation-advertising-search --confirm
+docker compose exec -T paper-digest research-vault send-test --topic recommendation-advertising-search --confirm
 ```
 
 此命令会产生**一条真实群消息**，但不会启动日报任务；不用在命令行粘贴 Webhook。只有飞书明确返回成功码才报告请求已被接受，仍须在目标群核对。试发未确认（超时、断网或异常响应）时，先到群里核对，**不要盲目再次执行**；该人工试发不改变日报状态。
@@ -58,8 +70,8 @@ docker compose exec -T paper-digest paper-digest send-test --topic recommendatio
 
 ```bash
 # status 只查看联合主题，默认当天（北京时间）；不触发生成或发送
-docker compose exec -T paper-digest paper-digest status
-docker compose exec -T paper-digest paper-digest status 2026-10-07
+docker compose exec -T paper-digest research-vault status
+docker compose exec -T paper-digest research-vault status 2026-10-07
 ```
 
 | 状态 | 含义与处理 |
@@ -81,7 +93,7 @@ SQLite 使用 WAL；**不能仅复制运行中的单个 `.db` 文件**。用内�
 mkdir -p backups
 umask 077
 digest_backup_name="digest-backup-$(date +%Y%m%d-%H%M%S).db"
-docker compose exec -T paper-digest paper-digest backup "/data/$digest_backup_name"
+docker compose exec -T paper-digest research-vault backup "/data/$digest_backup_name"
 docker compose cp "paper-digest:/data/$digest_backup_name" "backups/$digest_backup_name"
 chmod 600 "backups/$digest_backup_name"
 ```

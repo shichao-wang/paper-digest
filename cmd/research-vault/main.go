@@ -18,14 +18,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/shichao-wang/paper-digest/internal/config"
-	"github.com/shichao-wang/paper-digest/internal/delivery"
-	"github.com/shichao-wang/paper-digest/internal/digest"
-	"github.com/shichao-wang/paper-digest/internal/job"
-	"github.com/shichao-wang/paper-digest/internal/papers"
-	"github.com/shichao-wang/paper-digest/internal/state"
-	"github.com/shichao-wang/paper-digest/internal/web"
-	"github.com/shichao-wang/paper-digest/skills"
+	"github.com/shichao-wang/research-vault/internal/config"
+	"github.com/shichao-wang/research-vault/internal/delivery"
+	"github.com/shichao-wang/research-vault/internal/digest"
+	"github.com/shichao-wang/research-vault/internal/job"
+	"github.com/shichao-wang/research-vault/internal/papers"
+	"github.com/shichao-wang/research-vault/internal/state"
+	"github.com/shichao-wang/research-vault/internal/web"
+	"github.com/shichao-wang/research-vault/skills"
 )
 
 func main() {
@@ -45,16 +45,16 @@ func run(args []string) error {
 	configPath := "config/config.json"
 	if len(args) > 0 && args[0] == "--config" {
 		if len(args) < 3 || args[1] == "" {
-			return errors.New("用法: paper-digest --config <文件> <命令>")
+			return errors.New("用法: research-vault --config <文件> <命令>")
 		}
 		configPath, args = args[1], args[2:]
 	}
 	if len(args) == 0 {
-		return errors.New("用法: paper-digest [--config <文件>] serve|health|status [日期]|preview <fixture.json>|eval|backup <文件>|send-test --topic <id> --confirm")
+		return errors.New("用法: research-vault [--config <文件>] serve|health|status [日期]|preview <fixture.json>|eval|backup <文件>|send-test --topic <id> --confirm")
 	}
 	if args[0] == "send-test" {
 		if len(args) != 4 || args[1] != "--topic" || args[2] == "" || args[3] != "--confirm" {
-			return errors.New("用法: paper-digest send-test --topic <id> --confirm（先确认目标群、机器人身份和测试内容）")
+			return errors.New("用法: research-vault send-test --topic <id> --confirm（先确认目标群、机器人身份和测试内容）")
 		}
 		cfg, err := config.Load(configPath)
 		if err != nil {
@@ -85,7 +85,7 @@ func run(args []string) error {
 	}
 	if args[0] == "preview" {
 		if len(args) != 2 {
-			return errors.New("用法: paper-digest preview <fixture.json>")
+			return errors.New("用法: research-vault preview <fixture.json>")
 		}
 		data, err := os.ReadFile(args[1])
 		if err != nil {
@@ -113,7 +113,7 @@ func run(args []string) error {
 			return err
 		}
 		if flags.NArg() != 0 {
-			return errors.New("用法: paper-digest health [--url <地址>]")
+			return errors.New("用法: research-vault health [--url <地址>]")
 		}
 		return checkHealth(context.Background(), *endpoint, &http.Client{Timeout: 5 * time.Second})
 	}
@@ -121,7 +121,7 @@ func run(args []string) error {
 		return fmt.Errorf("未知命令 %q", args[0])
 	}
 	if args[0] == "backup" && len(args) != 2 {
-		return errors.New("用法: paper-digest backup <未存在的目标文件>")
+		return errors.New("用法: research-vault backup <未存在的目标文件>")
 	}
 	options := serveOptions{Listen: "127.0.0.1:8080", WebDir: "web/dist"}
 	if args[0] == "serve" {
@@ -133,7 +133,7 @@ func run(args []string) error {
 			return err
 		}
 		if flags.NArg() != 0 || options.Listen == "" || options.WebDir == "" {
-			return errors.New("用法: paper-digest serve [--listen <地址>] [--web-dir <目录>]")
+			return errors.New("用法: research-vault serve [--listen <地址>] [--web-dir <目录>]")
 		}
 	}
 	cfg, err := config.Load(configPath)
